@@ -73,8 +73,10 @@ messages ("unbalanced save/restore") in both `restore_scan_state()` and
 **Severity:** High – calling `ipow(base, negative_exp)` enters an infinite
 loop due to arithmetic right-shift of a negative value never reaching zero.
 
-**Fix applied:** Added an early `return 0` guard when `exp < 0`, mirroring
-the behaviour of the analogous C function `_calc_power()` in `expr1.c`.
+**Fix applied:** Added an early `return 0` guard when `exp < 0` to avoid the
+infinite loop. Note that, unlike the analogous C function `_calc_power()` in
+`expr1.c`, this implementation does not emit `ErrNegativeExponent` and
+instead silently returns 0 for negative exponents.
 
 ---
 
