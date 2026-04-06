@@ -12,7 +12,7 @@ RUN apk add --no-cache build-base libxml2 m4 gmp \
 		perl-template-toolkit perl-app-cpanminus curl gmp-dev \
     && cpanm -l $HOME/perl5 --no-wget local::lib Template::Plugin::YAML \
     && git clone --depth 1 --recursive https://github.com/z88dk/z88dk.git ${Z88DK_PATH} \
-    && cd ${Z88DK_PATH} \ 
+    && cd ${Z88DK_PATH} \
     && eval "$(perl -I$HOME/perl5/lib/perl5 -Mlocal::lib)" \
     && chmod 777 build.sh \
     && BUILD_SDCC=1 BUILD_SDCC_HTTP=1 ./build.sh \
