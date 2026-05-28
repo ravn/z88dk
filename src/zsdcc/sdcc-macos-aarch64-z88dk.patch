@@ -2,7 +2,7 @@ Index: src/SDCCutil.c
 ===================================================================
 --- src/SDCCutil.c	(revision 15248)
 +++ src/SDCCutil.c	(working copy)
-@@ -745,12 +745,15 @@
+@@ -745,12 +745,14 @@
  #elif defined(__BORLANDC__)
    return "BORLANDC";
  #elif defined(__APPLE__)

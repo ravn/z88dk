@@ -2,7 +2,7 @@ Index: src/SDCCsymt.c
 ===================================================================
 --- src/SDCCsymt.c	(revision 15248)
 +++ src/SDCCsymt.c	(working copy)
-@@ -5219,12 +5219,24 @@
+@@ -5219,12 +5219,27 @@
                        continue;
                      }
                    found = true;

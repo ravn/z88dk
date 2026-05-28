@@ -51,7 +51,7 @@ BINS = bin/z88dk-appmake$(EXESUFFIX) bin/z88dk-copt$(EXESUFFIX) \
 	bin/z88dk-ucpp$(EXESUFFIX) bin/z88dk-sccz80$(EXESUFFIX) bin/z88dk-z80asm$(EXESUFFIX) \
 	bin/zcc$(EXESUFFIX) bin/z88dk-zpragma$(EXESUFFIX) bin/z88dk-zx7$(EXESUFFIX) \
 	bin/z88dk-z80nm$(EXESUFFIX) bin/z88dk-zobjcopy$(EXESUFFIX)  \
-	bin/z88dk-ticks$(EXESUFFIX) bin/z88dk-z80svg$(EXESUFFIX) \
+	bin/z88dk-ticks$(EXESUFFIX) \
 	bin/z88dk-font2pv1000$(EXESUFFIX) bin/z88dk-basck$(EXESUFFIX) \
 	bin/z88dk-lib$(EXESUFFIX) bin/z88dk-zx0$(EXESUFFIX)
 
@@ -82,10 +82,14 @@ $(SDCC_PATH)/configure: $(SDCC_DEPS)
 ifdef BUILD_SDCC
 ifdef BUILD_SDCC_HTTP
 	tar xzf $^
+	patch -d $(SDCC_PATH) -p0 < $(Z88DK_PATH)/src/zsdcc/sdcc-kr-regparm-preserve-z88dk.patch
+	patch -d $(SDCC_PATH) -p0 < $(Z88DK_PATH)/src/zsdcc/sdcc-macos-aarch64-z88dk.patch
 	touch $@
 else
 	svn checkout -r $(SDCC_VERSION) https://svn.code.sf.net/p/sdcc/code/trunk/sdcc -q $(SDCC_PATH)
 	patch -d $(SDCC_PATH) -p0 < $(Z88DK_PATH)/src/zsdcc/sdcc-z88dk.patch
+	patch -d $(SDCC_PATH) -p0 < $(Z88DK_PATH)/src/zsdcc/sdcc-kr-regparm-preserve-z88dk.patch
+	patch -d $(SDCC_PATH) -p0 < $(Z88DK_PATH)/src/zsdcc/sdcc-macos-aarch64-z88dk.patch
 endif
 endif
 
@@ -99,7 +103,7 @@ zsdcc-tarball: $(SDCC_PATH)/configure
 
 $(SDCC_PATH)/Makefile: $(SDCC_PATH)/configure
 ifdef BUILD_SDCC
-	cd $(SDCC_PATH) && CC=$(OCC) ./configure \
+	cd $(SDCC_PATH) && CC=$(OCC) CPPFLAGS="-I$(Z88DK_PATH)/third_party $(CPPFLAGS)" CXXFLAGS="-I$(Z88DK_PATH)/third_party $(CXXFLAGS)" ./configure \
 		--disable-ds390-port --disable-ds400-port \
 		--disable-hc08-port --disable-s08-port --disable-mcs51-port \
 		--disable-pic-port --disable-pic14-port --disable-pic16-port \
