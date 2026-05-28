@@ -1,0 +1,24 @@
+Index: src/SDCCval.c
+===================================================================
+--- src/SDCCval.c	(revision 15248)
++++ src/SDCCval.c	(working copy)
+@@ -3013,6 +3013,19 @@
+       break;
+     }
+ 
++  /* ravn/z88dk#4: computeType(..., RESULT_TYPE_CHAR, op) can return a SIGNED
++     char result type while the folded value lands in [128,255] (out of
++     signed-char range) -- e.g. (unsigned char)0x80 | (0<<8).  The trailing
++     cheapestVal() does not correct it because the result is already a char
++     (cheapestVal only reduces int).  A signed char holding 0x80 then
++     sign-extends on a wider cast (-> 0xFF80), corrupting expressions like
++     ((uint16_t)((0x80|0)|(0<<8))>>8)&0xFF.  Make the char result unsigned so
++     the value is representable, mirroring cheapestVal's int->char rule. */
++  if (SPEC_NOUN (val->type) == V_CHAR && !SPEC_USIGN (val->type) &&
++      !SPEC_LONG (val->type) && !SPEC_LONGLONG (val->type) &&
++      SPEC_CVAL (val->type).v_int >= 128 && SPEC_CVAL (val->type).v_int <= 255)
++    SPEC_USIGN (val->type) = 1;
++
+   return reduceType ? cheapestVal (val) : val;
+ }
+ 

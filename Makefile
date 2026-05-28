@@ -84,12 +84,14 @@ ifdef BUILD_SDCC_HTTP
 	tar xzf $^
 	patch -d $(SDCC_PATH) -p0 < $(Z88DK_PATH)/src/zsdcc/sdcc-kr-regparm-preserve-z88dk.patch
 	patch -d $(SDCC_PATH) -p0 < $(Z88DK_PATH)/src/zsdcc/sdcc-macos-aarch64-z88dk.patch
+	patch -d $(SDCC_PATH) -p0 < $(Z88DK_PATH)/src/zsdcc/sdcc-const-shift-signext-z88dk.patch
 	touch $@
 else
 	svn checkout -r $(SDCC_VERSION) https://svn.code.sf.net/p/sdcc/code/trunk/sdcc -q $(SDCC_PATH)
 	patch -d $(SDCC_PATH) -p0 < $(Z88DK_PATH)/src/zsdcc/sdcc-z88dk.patch
 	patch -d $(SDCC_PATH) -p0 < $(Z88DK_PATH)/src/zsdcc/sdcc-kr-regparm-preserve-z88dk.patch
 	patch -d $(SDCC_PATH) -p0 < $(Z88DK_PATH)/src/zsdcc/sdcc-macos-aarch64-z88dk.patch
+	patch -d $(SDCC_PATH) -p0 < $(Z88DK_PATH)/src/zsdcc/sdcc-const-shift-signext-z88dk.patch
 endif
 endif
 
