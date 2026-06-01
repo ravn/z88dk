@@ -12,10 +12,13 @@ endif
 
 CC			?= gcc
 CFLAGS		+= -Wall -std=gnu11 -MMD -pedantic -I../common
-LDFLAGS     += -lgmp
 INSTALL 	?= install
 
-SRCS 		:= $(wildcard *.c) ../common/dirname.c
+# Skip the TI-83+ target (ti8xk) — requires GMP which is not available
+# on macOS without brew/MacPorts and is not needed for RC700.  Local
+# patch; revert these two lines if you ever re-enable ti8xk.
+CFLAGS      += -DNO_GMP
+SRCS        := $(filter-out ti8xk.c,$(wildcard *.c)) ../common/dirname.c
 
 OBJS_ALL	:= $(SRCS:.c=.o)
 OBJS		:= $(OBJS_ALL:$(PROJ).o=)
