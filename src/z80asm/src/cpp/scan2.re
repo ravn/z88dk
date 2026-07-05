@@ -129,7 +129,7 @@ string Token::to_string() const {
     case TType::String:
         return string_bytes(m_svalue);
     default:
-        if (g_options.get_swap_ixiy() != IXIY_NO_SWAP)
+        if (g_options.get_swap_ixiy())
             return str_swap_x_y(tokens[static_cast<int>(m_type)]);
         else
             return tokens[static_cast<int>(m_type)];
@@ -228,23 +228,29 @@ void ScannedLine::clear() {
 
 Token& ScannedLine::peek(int offset) {
     static Token end{ TType::End, false };
-    unsigned index = m_pos + offset;
-    if (index >= m_tokens.size())
+    std::ptrdiff_t index = static_cast<std::ptrdiff_t>(m_pos) + offset;
+    if (index < 0 || static_cast<size_t>(index) >= m_tokens.size())
         return end;
     else
-        return m_tokens[index];
+        return m_tokens[static_cast<size_t>(index)];
 }
 
 void ScannedLine::next(int n) {
-    m_pos += n;
-    if (m_pos > m_tokens.size())
+    std::ptrdiff_t pos = static_cast<std::ptrdiff_t>(m_pos) + n;
+    if (pos < 0)
+        m_pos = 0;
+    else if (static_cast<size_t>(pos) > m_tokens.size())
         m_pos = static_cast<unsigned>(m_tokens.size());
+    else
+        m_pos = static_cast<unsigned>(pos);
 }
 
 vector<Token> ScannedLine::peek_tokens(int offset) {
     vector<Token> out;
-    unsigned index = m_pos + offset;
-    for (unsigned i = index; i < m_tokens.size(); i++)
+    std::ptrdiff_t index = static_cast<std::ptrdiff_t>(m_pos) + offset;
+    if (index < 0)
+        return out;
+    for (size_t i = static_cast<size_t>(index); i < m_tokens.size(); i++)
         out.push_back(m_tokens[i]);
     return out;
 }
@@ -434,7 +440,7 @@ main_loop:
                               }
 
                               // check for -IXIY
-                              if (g_options.get_swap_ixiy() != IXIY_NO_SWAP) {
+                              if (g_options.get_swap_ixiy()) {
                                 switch (keyword) {
                                 case Keyword::IX: case Keyword::IXH: case Keyword::IXL:
                                 case Keyword::IY: case Keyword::IYH: case Keyword::IYL:

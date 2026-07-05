@@ -8,6 +8,9 @@
 **/*.dSYM/
 **/*.err
 **/*.exe
+**/*.gcda
+**/*.gcno
+**/*.gcov
 **/*.lis
 **/*.map
 **/*.o
@@ -43,3 +46,6 @@ win32/.vs/
 win32/ipch/
 win32/z88dk.VC.VC.opendb
 win32/z88dk.VC.db
+win32/.github/copilot-instructions.md
+
+.idea

@@ -1347,8 +1347,6 @@
  altd cpl                       ; Error
  altd cpl a                     ; Error
  altd dec (hl)                  ; Error
- altd dec (hl+)                 ; Error
- altd dec (hl-)                 ; Error
  altd dec (ix)                  ; Error
  altd dec (ix+0)                ; Error
  altd dec (ix+126)              ; Error
@@ -1400,8 +1398,6 @@
  altd fsyscall                  ; Error
  altd ibox a                    ; Error
  altd inc (hl)                  ; Error
- altd inc (hl+)                 ; Error
- altd inc (hl-)                 ; Error
  altd inc (ix)                  ; Error
  altd inc (ix+0)                ; Error
  altd inc (ix+126)              ; Error
@@ -1654,8 +1650,6 @@
  altd ioe cp jkhl, (iy+126)     ; Error
  altd ioe cp jkhl, (iy-128)     ; Error
  altd ioe dec (hl)              ; Error
- altd ioe dec (hl+)             ; Error
- altd ioe dec (hl-)             ; Error
  altd ioe dec (ix)              ; Error
  altd ioe dec (ix+0)            ; Error
  altd ioe dec (ix+126)          ; Error
@@ -1665,8 +1659,6 @@
  altd ioe dec (iy+126)          ; Error
  altd ioe dec (iy-128)          ; Error
  altd ioe inc (hl)              ; Error
- altd ioe inc (hl+)             ; Error
- altd ioe inc (hl-)             ; Error
  altd ioe inc (ix)              ; Error
  altd ioe inc (ix+0)            ; Error
  altd ioe inc (ix+126)          ; Error
@@ -2377,8 +2369,6 @@
  altd ioi cp jkhl, (iy+126)     ; Error
  altd ioi cp jkhl, (iy-128)     ; Error
  altd ioi dec (hl)              ; Error
- altd ioi dec (hl+)             ; Error
- altd ioi dec (hl-)             ; Error
  altd ioi dec (ix)              ; Error
  altd ioi dec (ix+0)            ; Error
  altd ioi dec (ix+126)          ; Error
@@ -2388,8 +2378,6 @@
  altd ioi dec (iy+126)          ; Error
  altd ioi dec (iy-128)          ; Error
  altd ioi inc (hl)              ; Error
- altd ioi inc (hl+)             ; Error
- altd ioi inc (hl-)             ; Error
  altd ioi inc (ix)              ; Error
  altd ioi inc (ix+0)            ; Error
  altd ioi inc (ix+126)          ; Error
@@ -8052,7 +8040,22 @@
  call.sis v, 0x1234             ; Error
  call.sis z, 0x1234             ; Error
  call3 0x123456                 ; Error
+ call3 c, 0x123456              ; Error
+ call3 eq, 0x123456             ; Error
+ call3 geu, 0x123456            ; Error
+ call3 gtu, 0x123456            ; Error
  call3 leu, 0x123456            ; Error
+ call3 ltu, 0x123456            ; Error
+ call3 m, 0x123456              ; Error
+ call3 nc, 0x123456             ; Error
+ call3 ne, 0x123456             ; Error
+ call3 nv, 0x123456             ; Error
+ call3 nz, 0x123456             ; Error
+ call3 p, 0x123456              ; Error
+ call3 pe, 0x123456             ; Error
+ call3 po, 0x123456             ; Error
+ call3 v, 0x123456              ; Error
+ call3 z, 0x123456              ; Error
  cbm 0                          ; Error
  cbm 127                        ; Error
  cbm 255                        ; Error
@@ -9621,8 +9624,6 @@
  ioe altd cp jkhl, (iy+126)     ; Error
  ioe altd cp jkhl, (iy-128)     ; Error
  ioe altd dec (hl)              ; Error
- ioe altd dec (hl+)             ; Error
- ioe altd dec (hl-)             ; Error
  ioe altd dec (ix)              ; Error
  ioe altd dec (ix+0)            ; Error
  ioe altd dec (ix+126)          ; Error
@@ -9632,8 +9633,6 @@
  ioe altd dec (iy+126)          ; Error
  ioe altd dec (iy-128)          ; Error
  ioe altd inc (hl)              ; Error
- ioe altd inc (hl+)             ; Error
- ioe altd inc (hl-)             ; Error
  ioe altd inc (ix)              ; Error
  ioe altd inc (ix+0)            ; Error
  ioe altd inc (ix+126)          ; Error
@@ -12146,8 +12145,6 @@
  ioi altd cp jkhl, (iy+126)     ; Error
  ioi altd cp jkhl, (iy-128)     ; Error
  ioi altd dec (hl)              ; Error
- ioi altd dec (hl+)             ; Error
- ioi altd dec (hl-)             ; Error
  ioi altd dec (ix)              ; Error
  ioi altd dec (ix+0)            ; Error
  ioi altd dec (ix+126)          ; Error
@@ -12157,8 +12154,6 @@
  ioi altd dec (iy+126)          ; Error
  ioi altd dec (iy-128)          ; Error
  ioi altd inc (hl)              ; Error
- ioi altd inc (hl+)             ; Error
- ioi altd inc (hl-)             ; Error
  ioi altd inc (ix)              ; Error
  ioi altd inc (ix+0)            ; Error
  ioi altd inc (ix+126)          ; Error
@@ -14644,9 +14639,15 @@
  jp3 gtu, 0x123456              ; Error
  jp3 leu, 0x123456              ; Error
  jp3 ltu, 0x123456              ; Error
+ jp3 m, 0x123456                ; Error
  jp3 nc, 0x123456               ; Error
  jp3 ne, 0x123456               ; Error
+ jp3 nv, 0x123456               ; Error
  jp3 nz, 0x123456               ; Error
+ jp3 p, 0x123456                ; Error
+ jp3 pe, 0x123456               ; Error
+ jp3 po, 0x123456               ; Error
+ jp3 v, 0x123456                ; Error
  jp3 z, 0x123456                ; Error
  jpe 0x1234                     ; Error
  jpe 0x123456                   ; Error
@@ -25772,7 +25773,6 @@
  rrhl                           ; Error
  rsmix                          ; Error
  rst -1                         ; Error
- rst 1                          ; Error
  rst 10                         ; Error
  rst 11                         ; Error
  rst 12                         ; Error
@@ -25782,7 +25782,6 @@
  rst 17                         ; Error
  rst 18                         ; Error
  rst 19                         ; Error
- rst 2                          ; Error
  rst 20                         ; Error
  rst 21                         ; Error
  rst 22                         ; Error
@@ -25792,7 +25791,6 @@
  rst 27                         ; Error
  rst 28                         ; Error
  rst 29                         ; Error
- rst 3                          ; Error
  rst 30                         ; Error
  rst 31                         ; Error
  rst 33                         ; Error
@@ -25802,7 +25800,6 @@
  rst 37                         ; Error
  rst 38                         ; Error
  rst 39                         ; Error
- rst 4                          ; Error
  rst 41                         ; Error
  rst 42                         ; Error
  rst 43                         ; Error
@@ -25811,7 +25808,6 @@
  rst 46                         ; Error
  rst 47                         ; Error
  rst 49                         ; Error
- rst 5                          ; Error
  rst 50                         ; Error
  rst 51                         ; Error
  rst 52                         ; Error
@@ -25819,8 +25815,6 @@
  rst 54                         ; Error
  rst 55                         ; Error
  rst 57                         ; Error
- rst 6                          ; Error
- rst 7                          ; Error
  rst 9                          ; Error
  rst v, 63                      ; Error
  rst v, 64                      ; Error

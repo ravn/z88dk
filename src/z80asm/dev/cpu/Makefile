@@ -1,30 +1,24 @@
 #------------------------------------------------------------------------------
-# Z88DK Z80 Macro Assembler
-#
+# Z80 assembler
 # Copyright (C) Paulo Custodio, 2011-2026
 # License: The Artistic License 2.0, http://www.perlfoundation.org/artistic_license_2_0
 #------------------------------------------------------------------------------
 
-OPCODES  = opcodes.dat
-PERL     = perl
-DOS2UNIX = $(PERL) ../../tools/posix.pl dos2unix
+all: opcodes.dat opcodes.txt
+opcodes.dat: make_opcodes.pl Opcodes.pm $(wildcard opcodes*.pl) Makefile
+	perl make_opcodes.pl opcodes.dat
+	dos2unix opcodes.dat
 
-all: $(OPCODES)
-$(OPCODES): make_opcodes.pl Opcodes.pm $(wildcard opcodes_*.pl) Makefile
-	$(PERL) make_opcodes.pl $(OPCODES) 
-	$(DOS2UNIX) $(OPCODES)
-
-all: opcodes.txt
-opcodes.txt: $(OPCODES) dump_opcodes.pl Opcodes.pm Makefile
-	$(PERL) dump_opcodes.pl $(OPCODES) opcodes.txt 
-	$(DOS2UNIX) opcodes.txt
+opcodes.txt: dump_opcodes.pl opcodes.dat Opcodes.pm Makefile
+	perl dump_opcodes.pl opcodes.dat opcodes.txt
+	dos2unix opcodes.txt
 
 all: cpu_test_z80_ok.asm
-cpu_test_z80_ok.asm: $(OPCODES) make_cpu_test.pl Opcodes.pm Makefile
-	$(PERL) make_cpu_test.pl $(OPCODES) cpu_test 
-	$(DOS2UNIX) cpu_test_*.asm
+cpu_test_z80_ok.asm: opcodes.dat make_cpu_test.pl Opcodes.pm Makefile
+	perl make_cpu_test.pl opcodes.dat cpu_test 
+	dos2unix cpu_test_*.asm
 
 all: cpu_rules.h
-cpu_rules.h: $(OPCODES) make_cpu_rules.pl Opcodes.pm Makefile
-	$(PERL) make_cpu_rules.pl $(OPCODES) cpu_rules.h 
-	$(DOS2UNIX) cpu_rules.h
+cpu_rules.h: opcodes.dat make_cpu_rules.pl Opcodes.pm Makefile
+	perl make_cpu_rules.pl opcodes.dat cpu_rules.h 
+	dos2unix cpu_rules.h

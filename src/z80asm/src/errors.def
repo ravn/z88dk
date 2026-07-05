@@ -48,6 +48,7 @@ X(ErrSymbolRedeclaration, "symbol redeclaration")
 // expressions
 X(ErrConstExprExpected, "constant expression expected")
 X(ErrDivisionByZero, "division by zero")
+X(ErrNegativeExponent, "negative exponent not supported in integer arithmetic")
 X(ErrExprRecursion, "recursive expression")
 
 // preprocessor
@@ -59,6 +60,7 @@ X(ErrIllegalFloatFormat, "illegal float format")
 X(ErrExprInParens, "interpreting indirect value as immediate")
 X(ErrIllegalIdent, "illegal identifier")
 X(ErrLocalLabelBeforeNormalLabel, "local label without normal label before it")
+X(ErrLocalLabelWithGlobalPrefix, "local label with global prefix")
 X(ErrIntRange, "integer range")
 X(ErrMissingBlock, "missing {} block")
 X(ErrMissingCloseBlock, "{} block not closed")

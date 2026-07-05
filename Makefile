@@ -10,8 +10,10 @@
 # EXESUFFIX is passed when cross-compiling Win32 on Linux
 ifeq ($(OS),Windows_NT)
   EXESUFFIX 	:= .exe
+  EXTRA_ALL     := bin/m4$(EXESUFFIX)
 else
   EXESUFFIX 	?=
+  EXTRA_ALL     :=
 endif
 
 PREFIX ?= /usr/local
@@ -49,20 +51,21 @@ export CC INSTALL CFLAGS CROSS
 
 BINS = bin/z88dk-appmake$(EXESUFFIX) bin/z88dk-copt$(EXESUFFIX) \
 	bin/z88dk-ucpp$(EXESUFFIX) bin/z88dk-sccz80$(EXESUFFIX) bin/z88dk-z80asm$(EXESUFFIX) \
+	bin/z88dk-80cc$(EXESUFFIX) \
 	bin/zcc$(EXESUFFIX) bin/z88dk-zpragma$(EXESUFFIX) bin/z88dk-zx7$(EXESUFFIX) \
 	bin/z88dk-z80nm$(EXESUFFIX) bin/z88dk-zobjcopy$(EXESUFFIX)  \
 	bin/z88dk-ticks$(EXESUFFIX) bin/z88dk-z80svg$(EXESUFFIX) \
 	bin/z88dk-font2pv1000$(EXESUFFIX) bin/z88dk-basck$(EXESUFFIX) \
 	bin/z88dk-lib$(EXESUFFIX) bin/z88dk-zx0$(EXESUFFIX)
 
-ALL = $(BINS) testsuite
+ALL = $(EXTRA_ALL) $(BINS) testsuite
 
 ALL_EXT = bin/z88dk-zsdcc$(EXESUFFIX)
 
 .PHONY: all
 all: 	$(ALL) $(ALL_EXT)
 
-src/config.h:
+src/config.h: | bin
 	$(shell if [ "${git_count}" != "" ]; then \
 		echo '#define PREFIX "${prefix_share}"' > src/config.h; \
 		echo '#define BINDIR "${bin_dir}"' >> src/config.h; \
@@ -75,8 +78,14 @@ src/config.h:
 		echo '#define UNIX 1' >> src/config.h; \
 		echo '#define Z88DK_VERSION "unknown-unknown-${version}"' >> src/config.h; \
 		fi)
+
+bin:
 	@mkdir -p bin
 
+# This rule is for windows/msys etc. We need to copy the
+# m4 binary into bin/ when building from source.
+bin/m4$(EXESUFFIX): | bin
+	@cp -f `which m4` bin/m4$(EXESUFFIX)
 
 $(SDCC_PATH)/configure: $(SDCC_DEPS)
 ifdef BUILD_SDCC
@@ -126,52 +135,55 @@ ifdef BUILD_SDCC
 endif
 
 
-bin/z88dk-appmake$(EXESUFFIX): src/config.h
+bin/z88dk-appmake$(EXESUFFIX): src/config.h | bin
 	$(MAKE) -C src/appmake PREFIX=`pwd` install
 
-bin/z88dk-copt$(EXESUFFIX): src/config.h
+bin/z88dk-copt$(EXESUFFIX): src/config.h | bin
 	$(MAKE) -C src/copt PREFIX=`pwd` install
 
-bin/z88dk-ucpp$(EXESUFFIX): src/config.h
+bin/z88dk-ucpp$(EXESUFFIX): src/config.h | bin
 	$(MAKE) -C src/ucpp PREFIX=`pwd` install
 
-bin/z88dk-sccz80$(EXESUFFIX): src/config.h
+bin/z88dk-sccz80$(EXESUFFIX): src/config.h | bin
 	$(MAKE) -C src/sccz80 PREFIX=`pwd` install
 
-bin/z88dk-z80asm$(EXESUFFIX): src/config.h
+bin/z88dk-80cc$(EXESUFFIX): src/config.h | bin
+	$(MAKE) -C src/80cc PREFIX=`pwd` install
+
+bin/z88dk-z80asm$(EXESUFFIX): src/config.h | bin
 	$(MAKE) -C src/z80asm PREFIX=`pwd` PREFIX_SHARE=`pwd` install
 
-bin/zcc$(EXESUFFIX): src/config.h
+bin/zcc$(EXESUFFIX): src/config.h | bin
 	$(MAKE) -C src/zcc PREFIX=`pwd` install
 
-bin/z88dk-zpragma$(EXESUFFIX): src/config.h
+bin/z88dk-zpragma$(EXESUFFIX): src/config.h | bin
 	$(MAKE) -C src/zpragma PREFIX=`pwd` install
 
-bin/z88dk-zx7$(EXESUFFIX): src/config.h
+bin/z88dk-zx7$(EXESUFFIX): src/config.h | bin
 	$(MAKE) -C src/zx7 PREFIX=`pwd` install
 
-bin/z88dk-zx0$(EXESUFFIX): src/config.h
+bin/z88dk-zx0$(EXESUFFIX): src/config.h | bin
 	$(MAKE) -C src/zx0 PREFIX=`pwd` install
 
-bin/z88dk-z80nm$(EXESUFFIX): src/config.h
+bin/z88dk-z80nm$(EXESUFFIX): src/config.h | bin
 	$(MAKE) -C src/z80nm PREFIX=`pwd` install
 
-bin/z88dk-zobjcopy$(EXESUFFIX): src/config.h
+bin/z88dk-zobjcopy$(EXESUFFIX): src/config.h | bin
 	$(MAKE) -C src/zobjcopy PREFIX=`pwd` install
 
-bin/z88dk-z80svg$(EXESUFFIX): src/config.h
+bin/z88dk-z80svg$(EXESUFFIX): src/config.h | bin
 	$(MAKE) -C support/graphics PREFIX=`pwd` install
 
-bin/z88dk-basck$(EXESUFFIX): src/config.h
+bin/z88dk-basck$(EXESUFFIX): src/config.h | bin
 	$(MAKE) -C support/basck PREFIX=`pwd` install
 
-bin/z88dk-font2pv1000$(EXESUFFIX): src/config.h
+bin/z88dk-font2pv1000$(EXESUFFIX): src/config.h | bin
 	$(MAKE) -C support/pv1000 PREFIX=`pwd` install
 
-bin/z88dk-ticks$(EXESUFFIX): src/config.h
+bin/z88dk-ticks$(EXESUFFIX): src/config.h | bin
 	$(MAKE) -C src/ticks PREFIX=`pwd` install
 
-bin/z88dk-lib$(EXESUFFIX): src/config.h
+bin/z88dk-lib$(EXESUFFIX): src/config.h | bin
 	$(MAKE) -C src/z88dk-lib PREFIX=`pwd` install
 
 
@@ -185,6 +197,7 @@ install: install-clean
 	$(MAKE) -C src/copt PREFIX=$(DESTDIR)$(PREFIX) install
 	$(MAKE) -C src/ucpp PREFIX=$(DESTDIR)$(PREFIX) install
 	$(MAKE) -C src/sccz80 PREFIX=$(DESTDIR)$(PREFIX) install
+	$(MAKE) -C src/80cc PREFIX=$(DESTDIR)$(PREFIX) install
 	$(MAKE) -C src/z80asm  PREFIX=$(DESTDIR)$(PREFIX) PREFIX_SHARE=$(DESTDIR)$(prefix_share) install
 	$(MAKE) -C src/zcc PREFIX=$(DESTDIR)$(PREFIX) install
 	$(MAKE) -C src/zpragma PREFIX=$(DESTDIR)$(PREFIX) install
@@ -237,6 +250,7 @@ bins-clean:
 	$(MAKE) -C src/common clean
 	$(MAKE) -C src/copt clean
 	$(MAKE) -C src/sccz80 clean
+	$(MAKE) -C src/80cc clean
 	$(MAKE) -C src/ticks clean
 	$(MAKE) -C src/ucpp clean
 	$(MAKE) -C src/z80asm clean
