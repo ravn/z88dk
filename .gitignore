@@ -49,3 +49,7 @@ win32/z88dk.VC.db
 win32/.github/copilot-instructions.md
 
 .idea
+
+# Local macOS native build markers/vendored deps (not upstream-tracked)
+/.macos-patched
+/third_party/
