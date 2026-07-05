@@ -1,6 +1,7 @@
 ;
-;       Generic pseudo graphics routines for text-only platforms
-;	Version for the 2x3 graphics symbols using generic console
+;   Generic pseudo graphics routines for text-only platforms
+;   Version for the 2x3 graphics symbols using generic console
+;   To limit to 1x3, add "defc _GFX_GENCON_PIXEL3 = 1" in grafix.inc
 ;
 
   IF    !__CPU_GBZ80__
@@ -17,9 +18,10 @@
         EXTERN  __gfx_coords
 
 
-
         ld      a, (__console_w)
+    IF  !_GFX_GENCON_PIXEL3
         add     a
+    ENDIF
         dec     a
         cp      h
         ret     c
@@ -40,10 +42,12 @@
         ld      h, 0                    ;l = y
         add     hl, de
         ld      b, (hl)                 ; y / 3
-        and     a                       ; x/2
+    IF  !_GFX_GENCON_PIXEL3
+        sub     a                       ; x/2
         ld      a, c
         rra
         ld      c, a
+    ENDIF
         push    bc                      ;Save reduced coordinates
     IF  _GFX_GENCON_USEPLOTC
         call    generic_console_pointxy
@@ -52,7 +56,11 @@
         call    generic_console_vpeek
     ENDIF
     IF  _GFX_TEXT_USE_INDEX
+      IF  _GFX_GENCON_PIXEL3
+        cp      8
+      ELSE
         cp      64
+      ENDIF
         jr      c, inrange
         xor     a
 inrange:
@@ -60,7 +68,11 @@ inrange:
     ELSE
         ld      hl, textpixl
         ld      e, 0
-        ld      b, 64                   ; whole symbol table size
+      IF  _GFX_GENCON_PIXEL3
+        ld      b, 8                    ; whole symbol table size (1*3)
+      ELSE
+        ld      b, 64                   ; whole symbol table size (2*3)
+      ENDIF
 ckmap:
         cp      (hl)                    ; compare symbol with the one in map
         jr      z, chfound
@@ -87,19 +99,26 @@ chfound:
     ; Now values 1 or 2
         jr      c, is1
         add     a
+    IF  !_GFX_GENCON_PIXEL3
         add     a
+    ENDIF
 is1:
         add     a
+    IF  !_GFX_GENCON_PIXEL3
         add     a
+    ENDIF
 iszero:
-        ld      h, a                    ;Save pixel to set for a moment
 
+    IF  !_GFX_GENCON_PIXEL3
+        ld      h, a                    ;Save pixel to set for a moment
         ld      a, (__gfx_coords+1)     ;original x
         rrca
         ld      a, h
         jr      nc, evencol
         add     a
 evencol:
+    ENDIF
+
     IF  NEEDplot
         or      e
     ENDIF
@@ -113,7 +132,9 @@ evencol:
     IF  NEEDpoint
         and     e
         pop     bc                      ;Dump reduced coordinates
+
     ELSE
+
       IF    _GFX_TEXT_USE_INDEX
     ; The character is the index
       ELSE
@@ -133,7 +154,9 @@ evencol:
         ld      e, 1                    ;raw mode
         call    generic_console_printc
       ENDIF
+
     ENDIF
+
         pop     bc                      ;restore callers
         ret
 

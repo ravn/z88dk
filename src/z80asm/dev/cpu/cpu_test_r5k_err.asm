@@ -4759,7 +4759,22 @@
  call.sis v, 0x1234             ; Error
  call.sis z, 0x1234             ; Error
  call3 0x123456                 ; Error
+ call3 c, 0x123456              ; Error
+ call3 eq, 0x123456             ; Error
+ call3 geu, 0x123456            ; Error
+ call3 gtu, 0x123456            ; Error
  call3 leu, 0x123456            ; Error
+ call3 ltu, 0x123456            ; Error
+ call3 m, 0x123456              ; Error
+ call3 nc, 0x123456             ; Error
+ call3 ne, 0x123456             ; Error
+ call3 nv, 0x123456             ; Error
+ call3 nz, 0x123456             ; Error
+ call3 p, 0x123456              ; Error
+ call3 pe, 0x123456             ; Error
+ call3 po, 0x123456             ; Error
+ call3 v, 0x123456              ; Error
+ call3 z, 0x123456              ; Error
  clr ixh                        ; Error
  clr ixl                        ; Error
  clr iyh                        ; Error
@@ -7355,9 +7370,15 @@
  jp3 gtu, 0x123456              ; Error
  jp3 leu, 0x123456              ; Error
  jp3 ltu, 0x123456              ; Error
+ jp3 m, 0x123456                ; Error
  jp3 nc, 0x123456               ; Error
  jp3 ne, 0x123456               ; Error
+ jp3 nv, 0x123456               ; Error
  jp3 nz, 0x123456               ; Error
+ jp3 p, 0x123456                ; Error
+ jp3 pe, 0x123456               ; Error
+ jp3 po, 0x123456               ; Error
+ jp3 v, 0x123456                ; Error
  jp3 z, 0x123456                ; Error
  jx5 0x1234                     ; Error
  ld (0x1234), a'                ; Error
@@ -16274,7 +16295,6 @@
  rst 17                         ; Error
  rst 18                         ; Error
  rst 19                         ; Error
- rst 2                          ; Error
  rst 20                         ; Error
  rst 21                         ; Error
  rst 22                         ; Error
@@ -16284,7 +16304,6 @@
  rst 27                         ; Error
  rst 28                         ; Error
  rst 29                         ; Error
- rst 3                          ; Error
  rst 30                         ; Error
  rst 31                         ; Error
  rst 33                         ; Error
@@ -16294,7 +16313,6 @@
  rst 37                         ; Error
  rst 38                         ; Error
  rst 39                         ; Error
- rst 4                          ; Error
  rst 41                         ; Error
  rst 42                         ; Error
  rst 43                         ; Error
@@ -16304,7 +16322,6 @@
  rst 47                         ; Error
  rst 48                         ; Error
  rst 49                         ; Error
- rst 5                          ; Error
  rst 50                         ; Error
  rst 51                         ; Error
  rst 52                         ; Error
@@ -16313,7 +16330,6 @@
  rst 55                         ; Error
  rst 57                         ; Error
  rst 6                          ; Error
- rst 7                          ; Error
  rst 8                          ; Error
  rst 9                          ; Error
  rst v, 63                      ; Error

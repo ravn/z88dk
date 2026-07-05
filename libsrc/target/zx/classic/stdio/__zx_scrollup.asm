@@ -17,8 +17,9 @@
     EXTERN  zx_rowtab
 
     EXTERN  generic_console_zxn_tile_scrollup
+    EXTERN  generic_console_zxn_layer2_scrollup
 
-  IF    FORsam|FORz88
+  IF    FORsam|FORz88|FORzxn
     defc    NOROMCALLS=1
     EXTERN  SCREEN_BASE
     EXTERN  __sam_graphics_pagein
@@ -31,6 +32,8 @@ __zx_scrollup:
     ld      a, (__zx_screenmode)
     bit     6, a
     jp      nz, generic_console_zxn_tile_scrollup
+    bit     7,a
+    jp      nz, generic_console_zxn_layer2_scrollup
   ENDIF
     push    de
     push    bc

@@ -8,7 +8,7 @@
     SECTION code_graphics
     PUBLIC  pixeladdress_MODE0
     PUBLIC  w_pixeladdress_MODE0
-    EXTERN  __zx_screenmode
+    EXTERN  __zx_gfxmode
     EXTERN  SCREEN_BASE
 
 ; Entry  hl = x
@@ -31,6 +31,22 @@ w_pixeladdress_MODE0:
 ;  ..bc..../ixiy same
 ;  af..dehl/.... different
 pixeladdress_MODE0:
+IF FORzxn
+    ld      d,l	        ;d=y
+    ld      e,h	        ;e=x
+    pixelad
+    ld      a, (__zx_gfxmode)
+    cp      1
+    jr      nz, not_screen1
+    set     5, h
+not_screen1:
+    ld      a, e	;x
+    and     @00000111
+    xor     @00000111
+    ld      d, h
+    ld      e, l
+    ret
+ELSE
     ld      a, L
     and     a
     rra
@@ -53,7 +69,7 @@ pixeladdress_MODE0:
     rlca
     ld      e, a
   IF    FORzxn|FORts2068
-    ld      a, (__zx_screenmode)
+    ld      a, (__zx_gfxmode)
     cp      1
     jr      nz, not_screen1
     set     5, d
@@ -69,3 +85,4 @@ not_screen1:
     ld      h, d
     ld      l, e
     ret
+ENDIF
