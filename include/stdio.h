@@ -248,12 +248,15 @@ extern int __LIB__  fputc_callee(int c, FILE *fp) __smallc __z88dk_callee;
 #define putc(bp,fp) fputc_callee(bp,fp)
 #define putchar(bp) fputc_callee(bp,stdout)
 #else
-// clang expects putchar to be a library function not just a macro
-extern int putchar(int);
+// clang expects putchar to be a library function not just a macro.
+// __smallc carries the stack calling convention (sdcccall(0)) so clang pushes
+// the argument instead of leaving it in HL -- without it console output is
+// corrupted (see include/sys/compiler.h).
+extern int __LIB__ putchar(int) __smallc;
 #define putc(bp,fp) fputc(bp,fp)
 #endif
 
-extern int __LIB__ fgetc(FILE *fp);
+extern int __LIB__ fgetc(FILE *fp) __smallc;
 #define getc(f) fgetc(f)
 
 __ZPROTO2(int,,ungetc,int,c,FILE *,fp)
@@ -271,7 +274,7 @@ extern int __LIB__ ferror_fastcall(FILE *fp) __z88dk_fastcall;
 #define ferror(f) ferror_fastcall(f)
 #endif
 
-extern int __LIB__ puts(const char *);
+extern int __LIB__ puts(const char *) __smallc;
 
 #ifdef __STDC_ABI_ONLYe
 

@@ -51,9 +51,41 @@
 // Make intellisense run easier..
 #if __clang__ | __CLANG | __XCC
 #define __STDC_ABI_ONLY
-#define __smallc
-#define __z88dk_callee
-#define __z88dk_fastcall
+// ravn/llvm-z80 clang honours SDCC calling conventions via the sdcccall
+// attribute.  z88dk's classic clib functions are compiled __smallc (arguments
+// pushed on the stack, caller cleans up) -- which is exactly sdcccall(0).
+// Without this the attribute is a no-op and clang passes fixed arguments in
+// HL, so e.g. putchar('H') -> the callee does `pop hl` and reads stack garbage
+// (console output is corrupted).
+//
+// __z88dk_fastcall maps to the z80_fastcall attribute, which selects the
+// ravn/llvm-z80 backend's z88dk-fastcall convention (CallingConv::
+// Z80_Z88dkFastCall).  A single argument is passed in a fixed register by
+// width, matching z88dk's classic clib (verified from source):
+//   width | z88dk_fastcall (asm reads)      | z80_fastcall (backend)
+//   ------+---------------------------------+---------------------------------
+//   8-bit | L      (rs232_put.asm: `ld a,l`)| L      <- match
+//   16-bit| HL     (swapendian.asm)         | HL     <- match
+//   32-bit| DEHL                            | DE:HL  <- match (DE high, HL low)
+// The return value uses the same registers.  Before z80_fastcall existed the
+// macro was a no-op that only happened to work for a single 16-bit argument
+// (clang's default i16 arg also lands in HL); 8/32-bit args were wrong.  Now
+// all three widths are correct by construction.  The 16-bit contract remains
+// pinned by a red-green regression test:
+//   z88dk/test/clang/fastcall_abi_16.c
+// and the full L/HL/DE:HL discipline by the LLVM lit test
+//   llvm/test/CodeGen/Z80/z88dk-fastcall.ll (in the ravn/llvm-z80 tree).
+// __z88dk_callee maps to the z80_callee attribute: arguments pushed on the
+// stack like sdcccall(0), but the CALLEE cleans them up (CallingConv::
+// Z80_Z88dkCallee).  This is the correct mapping -- z88dk clib functions marked
+// __z88dk_callee callee-clean in their .asm, so the previous no-op was a latent
+// bug (clang caller-cleaned while the callee also cleaned -> stack corruption).
+// Backend mechanism pinned by llvm/test/CodeGen/Z80/z88dk-callee.ll; frontend
+// mapping by clang/test/CodeGen/z80-callee.c.  End-to-end validation against a
+// real clib link is Phase C.
+#define __smallc __attribute__((sdcccall(0)))
+#define __z88dk_callee __attribute__((z80_callee))
+#define __z88dk_fastcall __attribute__((z80_fastcall))
 #endif
 
 #else
