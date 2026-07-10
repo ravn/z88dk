@@ -12,6 +12,8 @@ ${NEWLIB_ROOT}l/clang/__sxor.asm
 ${NEWLIB_ROOT}l/clang/__srems.asm
 ${NEWLIB_ROOT}l/clang/__sdivs.asm
 ${NEWLIB_ROOT}l/clang/__lmulu.asm
+${NEWLIB_ROOT}l/clang/__ldivu.asm
+${NEWLIB_ROOT}l/clang/__ldivs.asm
 ${NEWLIB_ROOT}l/clang/__lshru.asm
 ${NEWLIB_ROOT}l/clang/__sremu.asm
 ${NEWLIB_ROOT}l/clang/__sdivu.asm
