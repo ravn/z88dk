@@ -213,11 +213,17 @@ extern char __LIB__  *strdup(const char *s);
 #ifndef __STDC_ABI_ONLY
 extern char __LIB__  *strdup_fastcall(const char *s)  __z88dk_fastcall;
 #define strdup(x) strdup_fastcall(x)
+#elif defined(__LLVMZ80)  /* llvmz80 register ABI: see strlen */
+extern char __LIB__  *strdup_fastcall(const char *s)  __z88dk_fastcall;
+#define strdup(x) strdup_fastcall(x)
 #endif
 
 
 extern char __LIB__  *strerror(char *s);
 #ifndef __STDC_ABI_ONLY
+extern char __LIB__  *strerror_fastcall(char *s)  __z88dk_fastcall;
+#define strerror(x) strerror_fastcall(x)
+#elif defined(__LLVMZ80)  /* llvmz80 register ABI: see strlen */
 extern char __LIB__  *strerror_fastcall(char *s)  __z88dk_fastcall;
 #define strerror(x) strerror_fastcall(x)
 #endif
@@ -261,6 +267,9 @@ extern size_t __LIB__  strlen_fastcall(const char *s) __z88dk_fastcall;
 
 extern char __LIB__  *strlwr(char *s);
 #ifndef __STDC_ABI_ONLY
+extern char __LIB__  *strlwr_fastcall(char *s) __z88dk_fastcall;
+#define strlwr(x) strlwr_fastcall(x)
+#elif defined(__LLVMZ80)  /* llvmz80 register ABI: see strlen */
 extern char __LIB__  *strlwr_fastcall(char *s) __z88dk_fastcall;
 #define strlwr(x) strlwr_fastcall(x)
 #endif
@@ -338,6 +347,9 @@ extern char __LIB__  *strrev(char *s);
 #ifndef __STDC_ABI_ONLY
 extern char __LIB__  *strrev_fastcall(char *s) __z88dk_fastcall;
 #define strrev(x) strrev_fastcall(x)
+#elif defined(__LLVMZ80)  /* llvmz80 register ABI: see strlen */
+extern char __LIB__  *strrev_fastcall(char *s) __z88dk_fastcall;
+#define strrev(x) strrev_fastcall(x)
 #endif
 
 
@@ -351,6 +363,9 @@ extern size_t __LIB__ strrspn_callee(const char *s,const char *set) __smallc __z
 
 extern char __LIB__  *strrstrip(char *s);
 #ifndef __STDC_ABI_ONLY
+extern char __LIB__  *strrstrip_fastcall(char *s)  __z88dk_fastcall;
+#define strrstrip(x) strrstrip_fastcall(x)
+#elif defined(__LLVMZ80)  /* llvmz80 register ABI: see strlen */
 extern char __LIB__  *strrstrip_fastcall(char *s)  __z88dk_fastcall;
 #define strrstrip(x) strrstrip_fastcall(x)
 #endif
@@ -379,6 +394,9 @@ extern char __LIB__  *strstrip(char *s);
 #ifndef __STDC_ABI_ONLY
 extern char __LIB__  *strstrip_fastcall(char *s)  __z88dk_fastcall;
 #define strstrip(x) strstrip_fastcall(x)
+#elif defined(__LLVMZ80)  /* llvmz80 register ABI: see strlen */
+extern char __LIB__  *strstrip_fastcall(char *s)  __z88dk_fastcall;
+#define strstrip(x) strstrip_fastcall(x)
 #endif
 
 __ZPROTO2(char,*,strtok,char *,s,const char *,delim)
@@ -395,6 +413,9 @@ extern char __LIB__ *strtok_r_callee(char *s,const char *delim,char **last_s) __
 
 extern char __LIB__  *strupr(char *s);
 #ifndef __STDC_ABI_ONLY
+extern char __LIB__  *strupr_fastcall(char *s) __z88dk_fastcall;
+#define strupr(x) strupr_fastcall(x)
+#elif defined(__LLVMZ80)  /* llvmz80 register ABI: see strlen */
 extern char __LIB__  *strupr_fastcall(char *s) __z88dk_fastcall;
 #define strupr(x) strupr_fastcall(x)
 #endif

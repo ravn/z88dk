@@ -48,12 +48,22 @@ int main(void) {
      * literal) so clang cannot constant-fold it and must emit the real call. */
     int blen = (int)strlen(b);
 
-    printf("str [%s] %d %d [%s] %d %d%d%d %d %d %d %d\n",
+    /* Single-arg funcs that only have a `#define X X_fastcall` redirect (no
+     * __ZPROTO): strupr/strlwr/strrev/strstrip/strrstrip.  Under llvmz80 these
+     * must route to _X_fastcall (HL in/out) or they hit the stack-ABI _X. */
+    char ub[8]; strcpy(ub, "aBcD"); strupr(ub);          /* -> ABCD */
+    char lb[8]; strcpy(lb, "aBcD"); strlwr(lb);          /* -> abcd */
+    char vb[8]; strcpy(vb, "abcd"); strrev(vb);          /* -> dcba */
+    char sb[12]; strcpy(sb, "  hi  "); char *sp = strstrip(sb);  /* left  -> "hi  " */
+    char tb[12]; strcpy(tb, "hey   "); char *tp = strrstrip(tb); /* right -> "hey" */
+
+    printf("str [%s] %d %d [%s] %d %d%d%d %d %d %d %d [%s][%s][%s][%s][%s]\n",
            b, (int)(rcp == b), (int)(rct == b),
            nb, (int)(rnc == nb),
            ceq, clt, cgt,
            (int)(pc - "hello"),
            (int)((char *)pm - "hello"),
-           mlt, blen);
+           mlt, blen,
+           ub, lb, vb, sp, tp);
     return 0;
 }
