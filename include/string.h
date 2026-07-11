@@ -246,6 +246,15 @@ extern size_t __LIB__  strlen(const char *s);
 #ifndef __STDC_ABI_ONLY
 extern size_t __LIB__  strlen_fastcall(const char *s) __z88dk_fastcall;
 #define strlen(x) strlen_fastcall(x)
+#elif defined(__LLVMZ80)
+/* ravn/llvm-z80: __STDC_ABI_ONLY disables the fastcall routing above, but the
+ * classic clib's plain _strlen is __smallc (stack ABI) while clang calls the
+ * unattributed strlen with the pointer in HL -> mismatch (reads stack garbage,
+ * e.g. strlen("Hello") returned 1200).  strlen has no __ZPROTO reversed-arg
+ * form to bridge, so route it to strlen_fastcall (z80_fastcall = HL in/out,
+ * aliases asm_strlen in the lib) to match llvmz80's register ABI. */
+extern size_t __LIB__  strlen_fastcall(const char *s) __z88dk_fastcall;
+#define strlen(x) strlen_fastcall(x)
 #endif
 
 

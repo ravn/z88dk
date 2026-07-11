@@ -41,7 +41,8 @@ OUT=$("$NTVCM" "$WORK/rt.com" 2>/dev/null | tr -d '\r')
 #   strchr('l' in "hello")              -> index 2
 #   memchr('l' in "hello",5)            -> index 2
 #   memcmp("abcd","abce",4) < 0         -> 1
-EXP='str [Hello!] 1 1 [XYZ....] 1 011 2 2 1'
+#   strlen(b) where b == "Hello!"       -> 6
+EXP='str [Hello!] 1 1 [XYZ....] 1 011 2 2 1 6'
 echo "$OUT" | grep -qF "$EXP" || fail "str* output wrong. got: [$OUT] want: [$EXP]"
 
-echo "PASS: llvmz80 strcpy/strcmp/strcat/strchr/strncpy/memcmp/memchr bridges link and behave correctly"
+echo "PASS: llvmz80 strcpy/strcmp/strcat/strchr/strncpy/memcmp/memchr +strlen bridges link and behave correctly"

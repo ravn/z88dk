@@ -44,12 +44,16 @@ int main(void) {
     /* memcmp: "abcd" < "abce" -> 1 */
     int mlt = memcmp("abcd", "abce", 4) < 0;
 
-    printf("str [%s] %d %d [%s] %d %d%d%d %d %d %d\n",
+    /* strlen of the runtime buffer b ("Hello!") -> 6.  Uses b (not a string
+     * literal) so clang cannot constant-fold it and must emit the real call. */
+    int blen = (int)strlen(b);
+
+    printf("str [%s] %d %d [%s] %d %d%d%d %d %d %d %d\n",
            b, (int)(rcp == b), (int)(rct == b),
            nb, (int)(rnc == nb),
            ceq, clt, cgt,
            (int)(pc - "hello"),
            (int)((char *)pm - "hello"),
-           mlt);
+           mlt, blen);
     return 0;
 }
