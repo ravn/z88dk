@@ -55,9 +55,31 @@
 	DEFM	%1
 	DEFB	0x00
 
+;; --- z88dk intrinsic_label(NAME): the extern marker call becomes a bare
+;;     label so z88dk-ticks -start/-end can gate the cycle counter on it
+;;     (mirrors lib/z80rules.9 for sccz80/sdcc).  Handles the mid-function
+;;     `call` form and the tail-position `jp` form clang emits. ---
+	call	_intrinsic_label_%1
+=
+%1:
+
+	jp	_intrinsic_label_%1
+=
+%1:
+	ret
+
 	.short	%1
 =
 	DEFW	%1
+
+	.long	%1
+=
+	DEFQ	%1
+
+	.quad	%1
+=
+	DEFQ	%1
+	DEFQ	0
 
 	.byte	%1
 =
@@ -66,6 +88,16 @@
 	.zero	%1
 =
 	DEFS	%1
+
+;; --- alignment: Z80 has no alignment requirement, drop it ---
+	.p2align	%1
+=
+
+	.balign	%1
+=
+
+	.align	%1
+=
 
 ;; --- drop func-end labels (only referenced by stripped .size) ---
 .Lfunc_end%1:
