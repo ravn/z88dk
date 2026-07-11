@@ -189,10 +189,17 @@ IF CRT_ENABLE_COMMANDLINE = 1
     INCLUDE	"crt/classic/crt_command_line.inc"
     push    hl	;argv
     push    bc	;argc
+    ; Register ABI (llvmz80/clang: 1st arg HL, 2nd arg DE): argc->hl, argv->de.
+    ; hl=argv, bc=argc here; harmless to sccz80/sdcc (they read args off stack).
+    ld      d,h
+    ld      e,l	;de = argv
+    ld      h,b
+    ld      l,c	;hl = argc
 ELSE
     ld      hl,0
     push    hl  ;argv
     push    hl  ;argc
+    ld      de,0	;register ABI: de = argv = NULL (hl already argc = 0)
 ENDIF
     call    _main		;Call user code
     pop     bc	;kill argv

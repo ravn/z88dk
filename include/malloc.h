@@ -82,6 +82,20 @@ extern void __LIB__    mallinfo_callee(unsigned int *total, unsigned int *larges
 #define mallinfo(a,b)  mallinfo_callee(a,b)
 #endif
 
+#if defined(__STDC_ABI_ONLY) && defined(__LLVMZ80)
+/* ravn/llvm-z80: __STDC_ABI_ONLY skips the fastcall routing above, but the
+ * classic clib's plain _malloc/_free are __smallc (they `pop` the arg off the
+ * stack) while clang passes the pointer/size in HL -> _free frees stack
+ * garbage and corrupts the heap (tm.c died silently after ~3 alloc/free
+ * cycles).  Route to the *_fastcall entries (HL in, already in the lib) to
+ * match the register ABI.  calloc/realloc/sbrk/mallinfo keep their __ZPROTO
+ * reversed-arg forms (calloc is bridged via __calloc).  sccz80/sdcc unaffected. */
+extern void __LIB__    *malloc_fastcall(unsigned int size) __z88dk_fastcall;
+extern void __LIB__    free_fastcall(void *addr) __z88dk_fastcall;
+#define malloc(x)      malloc_fastcall(x)
+#define free(x)        free_fastcall(x)
+#endif
+
 // The following is to allow programs using the
 // older version of the near malloc library to
 // continue to work

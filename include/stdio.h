@@ -223,6 +223,14 @@ extern FILE __LIB__ *funopen(const void     *cookie, int (*readfn)(void *, char 
 
 extern int __LIB__  fclose(FILE *fp);
 extern int __LIB__  fflush(FILE *);
+#if defined(__LLVMZ80)
+/* ravn/llvm-z80: the classic clib's _fflush is __smallc (fetches its FILE*
+ * off the stack), but clang passes it in HL -> the worker reads stack garbage
+ * and corrupts SP, making the program restart in a loop at exit.  Route to a
+ * register-ABI wrapper (libsrc/l/llvmz80/__fflush.asm).  sccz80/sdcc unaffected. */
+extern int __LIB__  fflush_fastcall(FILE *) __z88dk_fastcall;
+#define fflush(a) fflush_fastcall(a)
+#endif
 
 extern void __LIB__ closeall(void);
 

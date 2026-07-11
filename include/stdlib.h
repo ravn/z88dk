@@ -28,10 +28,22 @@ extern int  __LIB__   atoi(const char *s);
 #ifndef __STDC_ABI_ONLY
 extern int  __LIB__   atoi_fastcall(const char *s) __z88dk_fastcall;
 #define atoi(x) atoi_fastcall(x)
+#elif defined(__LLVMZ80)
+/* ravn/llvm-z80: __STDC_ABI_ONLY disables the fastcall routing above, but the
+ * classic clib's plain _atoi is __smallc (stack ABI) while clang passes the
+ * pointer in HL -> mismatch (atoi("123") returned 523).  atoi has no reversed
+ * -arg form to bridge, so route it to atoi_fastcall (z80_fastcall = HL in/out,
+ * already in the lib) to match llvmz80's register ABI. */
+extern int  __LIB__   atoi_fastcall(const char *s) __z88dk_fastcall;
+#define atoi(x) atoi_fastcall(x)
 #endif
 
 extern long __LIB__   atol(const char *s);
 #ifndef __STDC_ABI_ONLY
+extern long __LIB__   atol_fastcall(const char *s) __z88dk_fastcall;
+#define atol(x) atol_fastcall(x)
+#elif defined(__LLVMZ80)
+/* ravn/llvm-z80: route to atol_fastcall for the register ABI (see atoi). */
 extern long __LIB__   atol_fastcall(const char *s) __z88dk_fastcall;
 #define atol(x) atol_fastcall(x)
 #endif
