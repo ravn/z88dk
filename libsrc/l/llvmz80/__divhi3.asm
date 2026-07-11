@@ -39,6 +39,7 @@ SECTION code_l_clang
 PUBLIC ___divhi3
 PUBLIC ___udivhi3
 PUBLIC ___mulhi3
+PUBLIC ___umulhi3
 PUBLIC ___modhi3
 PUBLIC ___umodhi3
 
@@ -59,7 +60,9 @@ ___udivhi3:
    ret
 
 ; int __mulhi3(int a, int b)  ->  a * b  (low 16 bits), result in DE
+; unsigned __umulhi3 aliases it: the low 16 bits of a product are sign-agnostic.
 ___mulhi3:
+___umulhi3:
    call l_mulu_16_16x16     ; hl = product
    ex de,hl                 ; DE = product
    ret

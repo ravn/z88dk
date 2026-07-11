@@ -81,3 +81,5 @@
 ../../arch/z80/z80/asm_z80_delay_tstate
 
 @../../l/clang.lst
+
+@../../l/llvmz80.lst
