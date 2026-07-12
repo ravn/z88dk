@@ -347,7 +347,9 @@ static char  *c_z80asm_exe = "z88dk-z80asm";
 static char  *c_ez80clang_exe = "ez80-clang";
 /* -compiler=llvmz80 : ravn/llvm-z80 GlobalISel clang.  Absolute default so
  * the workspace build works out of the box; override with LLVMZ80EXE in the
- * config file or environment.  (Committed macbook-style path, sed-rewritten
+ * config file or the LLVMZ80EXE environment variable (env wins -- see the
+ * -compiler=llvmz80 branch; used to swap in build-macos-asserts for verifier
+ * coverage).  (Committed macbook-style path, sed-rewritten
  * by the sonnyboy runner like the other absolute paths in this fork.) */
 static char  *c_llvmz80_exe = "/Users/ravn/z80/llvm-z80/build-macos/bin/clang";
 static char  *c_sdcc_exe = "z88dk-zsdcc";
@@ -3454,6 +3456,20 @@ static void configure_compiler(void)
 
         if (clangarg) {
             add_option_to_compiler(clangarg);
+        }
+
+        /* Two llvm-z80 builds coexist on the macbook: the Release, no-assert
+         * build-macos (the committed default in c_llvmz80_exe, used for
+         * benchmarks) and the RelWithDebInfo+assertions build-macos-asserts
+         * (for -debug-only / IR verifier coverage).  Honour a LLVMZ80EXE
+         * environment override so either can be selected per-invocation without
+         * editing the config file, matching the promise in c_llvmz80_exe's
+         * comment.  Config-file LLVMZ80EXE (if any) still wins over this only
+         * when the env var is unset. */
+        {
+            char *env_llvmz80 = getenv("LLVMZ80EXE");
+            if (env_llvmz80 && *env_llvmz80)
+                c_llvmz80_exe = env_llvmz80;
         }
 
         compiler_type = CC_LLVMZ80;
