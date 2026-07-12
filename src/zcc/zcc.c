@@ -3449,7 +3449,7 @@ static void configure_compiler(void)
          * clib headers use `inline` and clang overloadable/enable_if attrs. */
         snprintf(buf, sizeof(buf),
                  "--target=z80 -S -ffreestanding -std=gnu11 -o - %s",
-                 (opt_code_size ? "-Oz" : "-O2"));
+                 (opt_code_size ? "-Oz" : "-O3"));
         add_option_to_compiler(buf);
 
         if (clangarg) {
