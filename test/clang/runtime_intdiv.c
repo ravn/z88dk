@@ -4,18 +4,18 @@
  * NOT export them, so before libsrc/l/llvmz80/ existed any such program failed
  * to link with "undefined symbol: ___mulhi3".
  *
- * The harness (runtime_intdiv.sh) builds + runs this at BOTH -O2 and -O2 --opt-code-size so
+ * The harness (runtime_intdiv.sh) builds + runs this at -O2, -O3 and
+ * -O2 --opt-code-size so
  * every bridge symbol is exercised (which names the backend emits is opt-level
  * and code-shape dependent):
  *
  *   16-bit  __mulhi3                       : always (volatile mul below)
  *           __divhi3 / __udivhi3 /
- *           __modhi3 / __umodhi3           : emitted at --opt-code-size
+ *           __modhi3 / __umodhi3           : emitted at -O2 and --opt-code-size
  *           __divhi3_fast / __udivhi3_fast /
- *           __modhi3_fast / __umodhi3_fast : emitted at -O2 (zcc maps every
- *                                            non-size opt to clang -O3, which
- *                                            renames these to the _fast cores)
- *   8-bit   __udivqi3 / __umodqi3          : emitted at --opt-code-size (inlined at -O2)
+ *           __modhi3_fast / __umodhi3_fast : emitted at -O3 (clang -O3 renames
+ *                                            these to the _fast cores)
+ *   8-bit   __udivqi3 / __umodqi3          : emitted at --opt-code-size (inlined otherwise)
  *   32-bit  __divsi3 / __udivsi3 /
  *           __modsi3 / __umodsi3           : lone volatile div/mod blocks the
  *                                            div+rem fusion -> separate calls
@@ -36,7 +36,7 @@ __attribute__((noinline)) long sfuse(long a, long b, long *r) { *r = a % b; retu
 __attribute__((noinline)) unsigned long ufuse(unsigned long a, unsigned long b, unsigned long *r) { *r = a % b; return a / b; }
 
 /* 8-bit unsigned div/mod -> __udivqi3 / __umodqi3 (backend calls these at --opt-code-size;
- * at -O2 it inlines a DJNZ loop instead, so these names appear only at --opt-code-size). */
+ * otherwise it inlines a DJNZ loop, so these names appear only at --opt-code-size). */
 __attribute__((noinline)) unsigned char qdiv(unsigned char a, unsigned char b) { return a / b; }
 __attribute__((noinline)) unsigned char qmod(unsigned char a, unsigned char b) { return a % b; }
 

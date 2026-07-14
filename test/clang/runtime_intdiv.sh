@@ -3,15 +3,16 @@
 # runtime bridge (bridges to the shared l_* math cores).
 #
 # Which compiler-rt name the backend emits depends on the opt level and code
-# shape, so this builds + runs runtime_intdiv.c at BOTH -O2 and -O2 --opt-code-size and, for
+# shape, so this builds + runs runtime_intdiv.c at -O2, -O3 and
+# -O2 --opt-code-size and, for
 # each, (a) asserts the link resolved, (b) asserts the map references the
 # bridge symbols that opt level is expected to emit (coverage proof), and
 # (c) runs it in ntvcm and checks every computed value.
 #
-# GREEN: links + prints correct results at both opt levels.
+# GREEN: links + prints correct results at all opt levels.
 # RED  : a missing bridge symbol -> "undefined symbol: ___...", or a wrong-ABI
 #        bridge -> links but prints wrong numbers.  Both are caught below.
-#        (Before the _fast + __divmodsi4/__udivmodsi4 bridges existed, the -O2
+#        (Before the _fast + __divmodsi4/__udivmodsi4 bridges existed, the -O3
 #        link failed on ___divhi3_fast / ___divmodsi4.)
 #
 # Usage: ZCCCFG=<z88dk>/lib/config PATH=<z88dk>/bin:$PATH \
@@ -41,11 +42,28 @@ EXP_L="l 142857 1 307692307 9"
 EXP_F="f 142857 1 307692307 9"
 EXP_Q="q 28 4"
 
-# run_at <opt> <space-separated bridge symbols expected in the map>
+# run_at <opt> <expected syms...> [ -- <forbidden syms...> ]
+# Expected syms must be CALLED in the generated asm (emission/coverage proof);
+# forbidden syms must NOT be called (used to prove -O2 does NOT reach the
+# -O3-only _fast cores).  We grep the .s call sites -- not the .map -- because
+# each bridge object exports several PUBLIC aliases (e.g. ___divhi3 AND
+# ___divhi3_fast live in the same module), so a name can be DEFINED in the map
+# without being CALLED.  Symbols are the exact asm spelling (leading ___) and
+# matched with -wF so ___divhi3 does not spuriously match ___divhi3_fast.
 run_at() {
 	OPT="$1"; shift
-	EXPECT_SYMS="$*"
+	EXPECT_SYMS=""; FORBID_SYMS=""; _phase=expect
+	for a in "$@"; do
+		if [ "$a" = "--" ]; then _phase=forbid; continue; fi
+		if [ "$_phase" = expect ]; then EXPECT_SYMS="$EXPECT_SYMS $a"; else FORBID_SYMS="$FORBID_SYMS $a"; fi
+	done
 	B="$WORK/rt_$(echo "$OPT" | tr -d ' -')"
+
+	# Emit asm for the call-site (emission) assertions.
+	zcc +cpm -compiler=llvmz80 $OPT -S -o "$B.s" "$SRC" >"$B.slog" 2>&1 \
+		|| { echo "--- asm log ($OPT) ---"; cat "$B.slog"; fail "$OPT: zcc -S failed"; }
+
+	# Link + build the runnable .com (also proves every helper resolves).
 	if ! zcc +cpm -compiler=llvmz80 $OPT -create-app -o "$B" "$SRC" -m >"$B.log" 2>&1; then
 		echo "--- build log ($OPT) ---"; cat "$B.log"
 		if grep -qi 'undefined symbol' "$B.log"; then
@@ -55,9 +73,13 @@ run_at() {
 	fi
 	[ -f "$B.com" ] || fail "$OPT: no .com produced"
 
-	# (b) coverage proof: the map must reference each expected bridge symbol.
+	# (b) coverage proof: each expected helper must be CALLED in the asm.
 	for sym in $EXPECT_SYMS; do
-		grep -q "$sym" "$B.map" || fail "$OPT: expected bridge symbol $sym not referenced (coverage gap)"
+		grep -wF "$sym" "$B.s" >/dev/null || fail "$OPT: expected helper $sym not emitted (coverage gap)"
+	done
+	# (b') negative proof: forbidden helpers must NOT be called (opt mapping).
+	for sym in $FORBID_SYMS; do
+		grep -wF "$sym" "$B.s" >/dev/null && fail "$OPT: forbidden helper $sym emitted (zcc -O<n> not passed through to clang?)"
 	done
 
 	# (c) value check.
@@ -69,11 +91,15 @@ run_at() {
 	echo "  ok $OPT (symbols: $EXPECT_SYMS)"
 }
 
-# -O2 (clang -O3): 16-bit uses the _fast cores; 32-bit uses fused divmod.
-run_at "-O2" _divhi3_fast _udivhi3_fast _modhi3_fast _umodhi3_fast _mulhi3 _divmodsi4 _udivmodsi4 _divsi3 _modsi3 _udivsi3 _umodsi3
-# -O2 --opt-code-size (clang -Oz): 16-bit uses the plain cores; the 8-bit qi
-# cores appear (inlined at -O3); 32-bit still fused.  NB: -Os also maps to
-# clang -O3, so --opt-code-size is the only way to reach the -Oz name set.
-run_at "-O2 --opt-code-size" _divhi3 _udivhi3 _modhi3 _umodhi3 _mulhi3 _udivqi3 _umodqi3 _divmodsi4 _udivmodsi4 _divsi3 _modsi3 _udivsi3 _umodsi3
+# zcc now passes its -O<n> straight through to clang (-O2 -> clang -O2, -O3 ->
+# clang -O3; --opt-code-size -> clang -Oz).  Each level emits a different set of
+# bridge names, so exercise all three for full coverage:
+#   -O2 (clang -O2)  : plain 16-bit cores + separate/fused 32-bit.
+#   -O3 (clang -O3)  : 16-bit uses the _fast cores (Aggressive rename).
+#   --opt-code-size  : plain 16-bit cores + the 8-bit qi cores + fused 32-bit.
+run_at "-O2" ___divhi3 ___udivhi3 ___modhi3 ___umodhi3 ___mulhi3 ___divmodsi4 ___udivmodsi4 ___divsi3 ___modsi3 ___udivsi3 ___umodsi3 \
+	-- ___divhi3_fast ___udivhi3_fast ___modhi3_fast ___umodhi3_fast
+run_at "-O3" ___divhi3_fast ___udivhi3_fast ___modhi3_fast ___umodhi3_fast ___mulhi3 ___divmodsi4 ___udivmodsi4 ___divsi3 ___modsi3 ___udivsi3 ___umodsi3
+run_at "-O2 --opt-code-size" ___divhi3 ___udivhi3 ___modhi3 ___umodhi3 ___mulhi3 ___udivqi3 ___umodqi3 ___divmodsi4 ___udivmodsi4 ___divsi3 ___modsi3 ___udivsi3 ___umodsi3
 
-echo "PASS: llvmz80 integer runtime bridge (16/8/32-bit, fast + fused) links and computes correctly at -O2 and --opt-code-size"
+echo "PASS: llvmz80 integer runtime bridge (16/8/32-bit, fast + fused) links and computes correctly at -O2, -O3 and --opt-code-size"
