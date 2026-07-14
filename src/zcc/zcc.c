@@ -3448,10 +3448,27 @@ static void configure_compiler(void)
         /* zcc feeds this step a .i file (preprocessed), which the clang
          * driver already recognises as C -- no -x needed.  -o - writes asm to
          * stdout for the `>` redirect of the filter_out style.  gnu11: z88dk's
-         * clib headers use `inline` and clang overloadable/enable_if attrs. */
-        snprintf(buf, sizeof(buf),
-                 "--target=z80 -S -ffreestanding -std=gnu11 -o - %s",
-                 (opt_code_size ? "-Oz" : "-O3"));
+         * clib headers use `inline` and clang overloadable/enable_if attrs.
+         *
+         * Optimisation level: --opt-code-size wins with clang -Oz; otherwise
+         * we pass the zcc -O<n> level straight through (peepholeopt holds it),
+         * so `zcc -O2` -> `clang -O2` and `zcc -O3` -> `clang -O3` instead of
+         * the old always-`-O3`.  Clamp to clang's [0,3]; no -O -> peepholeopt 0
+         * -> -O0, matching the compiler-driver convention. */
+        {
+            char optflag[8];
+            if (opt_code_size) {
+                strcpy(optflag, "-Oz");
+            } else {
+                int lvl = peepholeopt;
+                if (lvl < 0) lvl = 0;
+                if (lvl > 3) lvl = 3;
+                snprintf(optflag, sizeof(optflag), "-O%d", lvl);
+            }
+            snprintf(buf, sizeof(buf),
+                     "--target=z80 -S -ffreestanding -std=gnu11 -o - %s",
+                     optflag);
+        }
         add_option_to_compiler(buf);
 
         if (clangarg) {
