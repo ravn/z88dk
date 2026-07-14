@@ -1,25 +1,48 @@
-/* Runtime regression test: the ravn/llvm-z80 backend emits compiler-rt runtime
- * helper names (__mulhi3/__divhi3/__modhi3 and their unsigned + 32-bit __*si3
- * siblings) for non-trivial integer multiply/divide/modulo.  z88dk's ez80clang
- * runtime (l/clang) does NOT export those names -- it was written for a
- * different compiler -- so before libsrc/l/llvmz80/ was added, any program with
- * a non-constant 16- or 32-bit divide failed to link with
- * "undefined symbol: ___mulhi3".
+/* Runtime regression test for EVERY routine in the libsrc/l/llvmz80/ integer
+ * runtime bridge.  The ravn/llvm-z80 backend emits compiler-rt helper names for
+ * non-trivial integer multiply/divide/modulo; z88dk's ez80clang runtime does
+ * NOT export them, so before libsrc/l/llvmz80/ existed any such program failed
+ * to link with "undefined symbol: ___mulhi3".
  *
- * This exercises all six 16-bit helpers and the four 32-bit helpers with
- * VOLATILE operands (so the compiler cannot constant-fold them and must emit
- * the runtime calls).  It links against z80_crt0.lib and prints the results;
- * the harness (runtime_intdiv.sh) compares them against the host-computed
- * expected values.
+ * The harness (runtime_intdiv.sh) builds + runs this at BOTH -O2 and -O2 --opt-code-size so
+ * every bridge symbol is exercised (which names the backend emits is opt-level
+ * and code-shape dependent):
  *
- * Values are chosen so the 16-bit multiply wraps mod 2^16 (1234*57 = 70338 ->
- * 4802), exercising the low-16 __mulhi3 == __umulhi3 aliasing.
+ *   16-bit  __mulhi3                       : always (volatile mul below)
+ *           __divhi3 / __udivhi3 /
+ *           __modhi3 / __umodhi3           : emitted at --opt-code-size
+ *           __divhi3_fast / __udivhi3_fast /
+ *           __modhi3_fast / __umodhi3_fast : emitted at -O2 (zcc maps every
+ *                                            non-size opt to clang -O3, which
+ *                                            renames these to the _fast cores)
+ *   8-bit   __udivqi3 / __umodqi3          : emitted at --opt-code-size (inlined at -O2)
+ *   32-bit  __divsi3 / __udivsi3 /
+ *           __modsi3 / __umodsi3           : lone volatile div/mod blocks the
+ *                                            div+rem fusion -> separate calls
+ *           __divmodsi4 / __udivmodsi4     : a div AND mod of the same operands
+ *                                            fuses into one call (ravn/llvm-z80
+ *                                            #248); emitted at every opt level
+ *
+ * Values wrap the 16-bit multiply mod 2^16 (1234*57 = 70338 -> 4802),
+ * exercising the low-16 __mulhi3 == __umulhi3 aliasing.
  */
 
 extern int printf(const char *, ...);
 
+/* Fused 32-bit divmod: quotient AND remainder of the SAME operands in one
+ * function makes the backend fold the pair into __divmodsi4 / __udivmodsi4.
+ * noinline keeps it a real runtime call (not folded into the caller). */
+__attribute__((noinline)) long sfuse(long a, long b, long *r) { *r = a % b; return a / b; }
+__attribute__((noinline)) unsigned long ufuse(unsigned long a, unsigned long b, unsigned long *r) { *r = a % b; return a / b; }
+
+/* 8-bit unsigned div/mod -> __udivqi3 / __umodqi3 (backend calls these at --opt-code-size;
+ * at -O2 it inlines a DJNZ loop instead, so these names appear only at --opt-code-size). */
+__attribute__((noinline)) unsigned char qdiv(unsigned char a, unsigned char b) { return a / b; }
+__attribute__((noinline)) unsigned char qmod(unsigned char a, unsigned char b) { return a % b; }
+
 int main(void)
 {
+	/* --- 16-bit + separate 32-bit: volatile blocks const-fold AND fusion --- */
 	volatile int a = 1234, b = 57;
 	volatile unsigned ua = 50000u, ub = 7u;
 	volatile long la = 1000000L, lb = 7L;
@@ -31,5 +54,18 @@ int main(void)
 	printf("l %ld %ld %lu %lu\n",
 	       (long)(la / lb), (long)(la % lb),
 	       (unsigned long)(lua / lub), (unsigned long)(lua % lub));
+
+	/* --- fused 32-bit divmod: __divmodsi4 / __udivmodsi4 --- */
+	volatile long fa = 1000000L, fb = 7L;
+	volatile unsigned long ufa = 4000000000UL, ufb = 13UL;
+	long sr;
+	long sq = sfuse(fa, fb, &sr);
+	unsigned long ur;
+	unsigned long uq = ufuse(ufa, ufb, &ur);
+	printf("f %ld %ld %lu %lu\n", sq, sr, uq, ur);
+
+	/* --- 8-bit unsigned: __udivqi3 / __umodqi3 --- */
+	volatile unsigned char qa = 200, qb = 7;
+	printf("q %u %u\n", (unsigned)qdiv(qa, qb), (unsigned)qmod(qa, qb));
 	return 0;
 }

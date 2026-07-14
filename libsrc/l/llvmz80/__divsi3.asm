@@ -46,6 +46,17 @@ PUBLIC ___modsi3
 PUBLIC ___udivsi3
 PUBLIC ___umodsi3
 
+; Fused 32-bit divmod (ravn/llvm-z80#248).  When a function computes both a/b
+; and a%b of the SAME 32-bit operands, the backend's legalizeCustom folds the
+; pair into ONE runtime call __divmodsi4 / __udivmodsi4 (quotient returned in
+; registers, remainder written through a caller pointer) instead of two full
+; 32-bit divisions.  It is emitted at EVERY opt level (fusion is opt-level
+; independent); the separate ___divsi3/... names above only appear when
+; something (e.g. volatile operands) blocks the fusion.  See the divmod ABI
+; note at ___divmodsi4 below.
+PUBLIC ___divmodsi4
+PUBLIC ___udivmodsi4
+
 EXTERN l_divs_32_32x32
 EXTERN l_divu_32_32x32
 
@@ -112,5 +123,80 @@ ___umodsi3:
    call l_divu_32_32x32
    pop ix
    exx
+   ex de,hl
+   ret
+
+; ---- fused divmod (quotient in registers, remainder via caller pointer) ----
+;
+; ABI (verified by disassembling `long f(long a,long b){return a/b + a%b;}` under
+;      `zcc +cpm -compiler=llvmz80 -O2`, 2026-07-14):
+;   quotient = __[u]divmodsi4(long dividend, long divisor, long *rem_slot)
+;   enter: HL:DE           = dividend a   (HL = HIGH word, DE = LOW word)
+;          stack (from ret) = b_lo, b_hi, &rem_slot   (little-endian words)
+;          IX               = caller frame ptr, MUST be preserved
+;   exit : HL:DE           = quotient     (HL = HIGH word, DE = LOW word)
+;          *rem_slot        = remainder (4 bytes, little-endian)
+;          caller cleans the 3 pushed words (`pop af; pop af; pop af`).
+;
+; The z88dk core computes quotient AND remainder in one pass:
+;   l_div[su]_32_32x32:  main dehl = quotient, alternate dehl' = remainder
+;   (core layout DE:HL = DE HIGH word, HL LOW word; the llvm-z80 HL:DE layout is
+;    the byte-swap, so a single `ex de,hl` converts between them).
+; The core TRASHES IX, so &rem_slot is read while the entry IX is still valid,
+; stashed on the stack across the core call, then popped back into IX (IX/IY are
+; bank-independent, unlike BC/DE/HL) so the remainder -- which the core leaves in
+; the ALTERNATE bank -- can be stored after a single `exx` brings it to main.
+;
+; Worked example a=1000000 (0x000F4240), b=7:
+;   quotient 142857 (0x0002:0x2E49) returned in HL:DE; remainder 1 stored at
+;   *rem_slot as 01 00 00 00.
+
+___divmodsi4:
+   ex de,hl                     ; dividend HL:DE -> core DE:HL (into alt bank)
+   exx                          ; dehl' = dividend a
+   push ix                      ; save caller frame ptr; [ix]+2=ret,+4=b_lo,
+   ld ix,0                      ;   +6=b_hi,+8=&rem_slot
+   add ix,sp
+   ld c,(ix+8)
+   ld b,(ix+9)                  ; BC = &rem_slot (read while IX valid)
+   push bc                      ; stash pointer across the (IX-trashing) core call
+   ld l,(ix+4)
+   ld h,(ix+5)                  ; HL = b_lo
+   ld e,(ix+6)
+   ld d,(ix+7)                  ; main dehl = divisor b
+   call l_divs_32_32x32         ; main dehl = quotient, alt dehl' = remainder
+   pop ix                       ; IX = &rem_slot (bank-independent)
+   exx                          ; main <- remainder (DE=hi word, HL=lo word)
+   ld (ix+0),l                  ; store remainder, little-endian
+   ld (ix+1),h
+   ld (ix+2),e
+   ld (ix+3),d
+   exx                          ; main <- quotient
+   pop ix                       ; restore caller frame ptr
+   ex de,hl                     ; core DE:HL -> llvm-z80 HL:DE (quotient)
+   ret
+
+___udivmodsi4:
+   ex de,hl
+   exx
+   push ix
+   ld ix,0
+   add ix,sp
+   ld c,(ix+8)
+   ld b,(ix+9)
+   push bc
+   ld l,(ix+4)
+   ld h,(ix+5)
+   ld e,(ix+6)
+   ld d,(ix+7)
+   call l_divu_32_32x32
+   pop ix
+   exx
+   ld (ix+0),l
+   ld (ix+1),h
+   ld (ix+2),e
+   ld (ix+3),d
+   exx
+   pop ix
    ex de,hl
    ret
