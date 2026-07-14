@@ -43,18 +43,32 @@ PUBLIC ___umulhi3
 PUBLIC ___modhi3
 PUBLIC ___umodhi3
 
+; -Os/-Oz emits the plain names above; any non-size opt level (zcc maps every
+; non-`--opt-code-size` build to clang `-O3`, see src/zcc/zcc.c) makes the
+; backend rename the div/mod libcalls to the "_fast" repeated-subtraction
+; variants (selectDivModRuntimeName in Z80InstructionSelector.cpp).  The ABI is
+; identical -- only the symbol name changes -- so the _fast entries are plain
+; aliases of the cores below (z88dk has no bounded fast core; the shared
+; l_div[su]_16_16x16 gives the same result).  Mul has no _fast variant.
+PUBLIC ___divhi3_fast
+PUBLIC ___udivhi3_fast
+PUBLIC ___modhi3_fast
+PUBLIC ___umodhi3_fast
+
 EXTERN l_divs_16_16x16
 EXTERN l_divu_16_16x16
 EXTERN l_mulu_16_16x16
 
 ; int __divhi3(int a, int b)  ->  a / b  (signed), result in DE
 ___divhi3:
+___divhi3_fast:
    call l_divs_16_16x16     ; hl = quotient, de = remainder
    ex de,hl                 ; DE = quotient (clang's return register)
    ret
 
 ; unsigned __udivhi3(unsigned a, unsigned b)  ->  a / b, result in DE
 ___udivhi3:
+___udivhi3_fast:
    call l_divu_16_16x16     ; hl = quotient, de = remainder
    ex de,hl                 ; DE = quotient
    ret
@@ -69,8 +83,10 @@ ___umulhi3:
 
 ; int __modhi3(int a, int b)  ->  a % b  (signed), result in DE
 ___modhi3:
+___modhi3_fast:
    jp l_divs_16_16x16       ; de = remainder already -> tail-call
 
 ; unsigned __umodhi3(unsigned a, unsigned b)  ->  a % b, result in DE
 ___umodhi3:
+___umodhi3_fast:
    jp l_divu_16_16x16       ; de = remainder already -> tail-call
