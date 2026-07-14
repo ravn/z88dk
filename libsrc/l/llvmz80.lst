@@ -1,5 +1,4 @@
 ${NEWLIB_ROOT}l/llvmz80/__call_iy.asm
-${NEWLIB_ROOT}l/llvmz80/__calloc.asm
 ${NEWLIB_ROOT}l/llvmz80/__fflush.asm
 ${NEWLIB_ROOT}l/llvmz80/__divhi3.asm
 ${NEWLIB_ROOT}l/llvmz80/__divsi3.asm
