@@ -9,6 +9,10 @@
 #   1. z88dk-copt <rules>   -- maps the bulk of the asm dialect: .text/.bss/
 #      .rodata -> SECTION *; .globl -> GLOBAL; .asciz/.short/.byte/.zero ->
 #      DEFM/DEFW/DEFB/DEFS; strips .file/.ident/.type/.size/.addrsig.
+#      NB: 64-bit `.quad` is NOT handled by copt -- z88dk's DEFQ is only 4 bytes,
+#      so a text-substitution rule cannot split the value (ravn/z88dk#27).  The
+#      splitquad.pl pre-pass (stage 0) rewrites `.quad` into two `.long` halves
+#      first, which copt's correct `.long -> DEFQ` (4-byte) rule then lowers.
 #   2. fixlabels.pl         -- copt tokenises on whitespace, so it cannot
 #      rewrite labels containing dots (`.LBB0_4`, `L_.str.1`); perl does the
 #      dot->underscore / leading-dot-strip rewrite copt cannot express.
@@ -26,7 +30,7 @@ set -eu
 COPT=$1; CPUARG=$2; RULES=$3
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
-"$COPT" "$CPUARG" "$RULES" | perl "$HERE/fixlabels.pl" | awk '
+perl "$HERE/splitquad.pl" | "$COPT" "$CPUARG" "$RULES" | perl "$HERE/fixlabels.pl" | awk '
   /^[ \t]*\.local[ \t]/ { next }
   /^[ \t]*\.comm[ \t]/ {
     split($2,c,","); cn[++nc]=c[1]; cs[nc]=c[2]; def[c[1]]=1; next
