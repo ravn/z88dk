@@ -345,13 +345,14 @@ static char  *c_options = NULL;
 static char  *c_z80asm_exe = "z88dk-z80asm";
 
 static char  *c_ez80clang_exe = "ez80-clang";
-/* -compiler=llvmz80 : ravn/llvm-z80 GlobalISel clang.  Absolute default so
- * the workspace build works out of the box; override with LLVMZ80EXE in the
- * config file or the LLVMZ80EXE environment variable (env wins -- see the
- * -compiler=llvmz80 branch; used to swap in build-macos-asserts for verifier
- * coverage).  (Committed macbook-style path, sed-rewritten
- * by the sonnyboy runner like the other absolute paths in this fork.) */
-static char  *c_llvmz80_exe = "/Users/ravn/z80/llvm-z80/build-macos/bin/clang";
+/* -compiler=llvmz80 : ravn/llvm-z80 GlobalISel clang.
+ * Default binary name "llvmz80-clang" is looked up on PATH; override with
+ * LLVMZ80EXE in the z88dk config file or the LLVMZ80EXE environment variable
+ * (env wins -- see the -compiler=llvmz80 branch).
+ * Install llvm-z80 and create a "llvmz80-clang" symlink (or rename) in a
+ * PATH directory, e.g.:
+ *   ln -s /opt/llvm-z80/bin/clang /usr/local/bin/llvmz80-clang */
+static char  *c_llvmz80_exe = "llvmz80-clang";
 static char  *c_sdcc_exe = "z88dk-zsdcc";
 static char  *c_sccz80_exe = "z88dk-sccz80";
 static char  *c_80cc_exe = "z88dk-80cc";

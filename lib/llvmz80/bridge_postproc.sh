@@ -49,4 +49,12 @@ perl "$HERE/splitquad.pl" | "$COPT" "$CPUARG" "$RULES" | perl "$HERE/fixlabels.p
       print "\tSECTION bss_compiler"
       for(i=1;i<=nc;i++){ print cn[i] ":"; print "\tDEFS " cs[i] }
     }
-  }' | grep -v '__do_zero_bss' | grep -v 'Declaring this symbol'
+  }' | grep -v '__do_zero_bss' | grep -v 'Declaring this symbol' \
+     | perl -pe '
+        # Relax conditional jr to jp.  clang emits jr cc,label where the
+        # assembled distance can exceed the +-127 B z80asm limit (llvm-z80 #267).
+        # jp cc,label is always safe (3 B vs 2 B; 1-byte penalty per site).
+        # Unconditional "jr label" (within a single TU) is safe by construction:
+        # clang only emits it for short local branches.  We leave those alone.
+        s/\bjr\s+(c|nc|z|nz|pe|po|p|m)\s*,/jp $1,/gi;
+     '
