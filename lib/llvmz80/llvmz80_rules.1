@@ -40,6 +40,19 @@
 =
 	SECTION rodata_compiler
 
+;; clang places mergeable read-only constants (const double[], large
+;; constant pools) in .rodata.cstN (N = 4/8/16/32).  z88dk's z80asm has no
+;; section merging, but the DATA must still be emitted -- without an explicit
+;; rule these fall through to the `.section %1 -> SECTION IGNORE` catch-all
+;; below, silently DROPPING the constants so they read as 0 at runtime
+;; (e.g. a runtime-indexed `static const double tab[]` returns 0.0).
+;; Map them to the ordinary rodata segment.  Verified red-green: a 4-element
+;; const double[] (=.rodata.cst32) returned 0.0 before this rule, correct
+;; value after.
+	.section	.rodata.cst%2,%1
+=
+	SECTION rodata_compiler
+
 	.section	.data.%2,%1
 =
 	SECTION data_compiler
