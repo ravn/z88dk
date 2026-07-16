@@ -16,9 +16,22 @@
 # that (defensively) survived copt, e.g. it will not touch `rodata` inside a
 # stray `.rodata.str1.1`.
 while (<>) {
-    # Family 1: strip the leading dot of .L labels, flatten any internal dots.
-    s/\.L([A-Za-z0-9_.]+)/ my $s=$1; $s=~tr:.:_:; "L$s" /ge;
-    # Families 2 & 3: any identifier with internal dot(s) -> dots become '_'.
-    s/(?<![.\w])([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+)/ my $s=$1; $s=~tr:.:_:; $s /ge;
-    print;
+    # Split each line into alternating unquoted / double-quoted segments so the
+    # dot->underscore label rewrites never reach the CONTENTS of a string
+    # literal.  copt has already lowered `.asciz "a.b.c"` to `DEFM "a.b.c"`, and
+    # the generic Family 2/3 rule below would otherwise see the token `a.b.c`
+    # inside the quotes and mangle it to `a_b_c` -- a silent runtime corruption
+    # of every string literal whose text looks like a dotted identifier
+    # (verified: `printf("x.y")` printed `x_y`).  The capture in split() keeps
+    # the delimiters, and the (?:[^"\\]|\\.)* body skips over \" escapes so a
+    # quote embedded in a string does not end the segment early.
+    my @seg = split /("(?:[^"\\]|\\.)*")/, $_, -1;
+    for my $s (@seg) {
+        next if substr($s, 0, 1) eq '"';   # leave quoted string bodies intact
+        # Family 1: strip the leading dot of .L labels, flatten any internal dots.
+        $s =~ s/\.L([A-Za-z0-9_.]+)/ my $t=$1; $t=~tr:.:_:; "L$t" /ge;
+        # Families 2 & 3: any identifier with internal dot(s) -> dots become '_'.
+        $s =~ s/(?<![.\w])([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+)/ my $t=$1; $t=~tr:.:_:; $t /ge;
+    }
+    print join('', @seg);
 }

@@ -345,10 +345,23 @@ extern int  __LIB__  abs(int n);
 #ifndef __STDC_ABI_ONLY
 extern int  __LIB__  abs_fastcall(int n) __z88dk_fastcall;
 #define abs(x) abs_fastcall(x)
+#elif defined(__LLVMZ80)
+/* ravn/llvm-z80: __STDC_ABI_ONLY disables the fastcall routing above, but the
+ * classic clib's plain _abs is __smallc (stack ABI) while clang passes the int
+ * in HL -> mismatch (abs(-42) returned garbage).  abs has no reversed-arg form
+ * to bridge, so route it to abs_fastcall (z80_fastcall = HL in/out, already in
+ * the lib) to match llvmz80's register ABI. */
+extern int  __LIB__  abs_fastcall(int n) __z88dk_fastcall;
+#define abs(x) abs_fastcall(x)
 #endif
 
 extern long __LIB__  labs(long n);
 #ifndef __STDC_ABI_ONLY
+extern long  __LIB__  labs_fastcall(long n) __z88dk_fastcall;
+#define labs(x) labs_fastcall(x)
+#elif defined(__LLVMZ80)
+/* ravn/llvm-z80: route labs to labs_fastcall for the register ABI (z80_fastcall
+ * 32-bit = DE:HL in/out, matching asm_labs).  See abs above. */
 extern long  __LIB__  labs_fastcall(long n) __z88dk_fastcall;
 #define labs(x) labs_fastcall(x)
 #endif
