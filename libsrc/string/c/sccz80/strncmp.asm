@@ -53,8 +53,20 @@ ENDIF
 
 
 ; Clang bridge for Classic
+; Clang bridge for Classic (llvmz80 register ABI).
+; __ZPROTO3(strncmp, s1, s2, n) -> ___strncmp(n, s2, s1): HL=n, DE=s2, [SP]=s1.
+; asm_strncmp enter: BC=n, DE=s1, HL=s2.
+; Stack on entry: [SP] = return addr, [SP+2] = s1 (callee-cleaned by ret).
 IF __CLASSIC
 PUBLIC ___strncmp
-defc ___strncmp = strncmp
+___strncmp:
+   ld c,l
+   ld b,h                   ; BC = n
+   pop hl                   ; HL = return address
+   ex (sp),hl               ; HL = s1, [SP] = return address
+   ex de,hl                 ; DE = s1, HL = s2 (was in DE)
+   call asm_strncmp         ; enter BC=n, DE=s1, HL=s2; exit A=diff
+   ex de,hl                 ; DE = result (C return value, sign-extends in A)
+   ret
 ENDIF
 
