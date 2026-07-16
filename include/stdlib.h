@@ -60,13 +60,13 @@ extern char __LIB__ *ltoa_callee(long num,char *buf,int radix) __smallc __z88dk_
 #define ltoa(a,b,c) ltoa_callee(a,b,c)
 #endif
 
-__ZPROTO3(long,,strtol,char *,nptr,char **,endptr,int,base)
+__ZPROTO3N(long,,strtol,char *,nptr,char **,endptr,int,base)
 #ifndef __STDC_ABI_ONLY
 extern long __LIB__ strtol_callee(char *nptr,char **endptr,int base) __smallc __z88dk_callee;
 #define strtol(a,b,c) strtol_callee(a,b,c)
 #endif
 
-__ZPROTO3(uint32_t,,strtoul,char *,nptr,char **,endptr,int,base)
+__ZPROTO3N(uint32_t,,strtoul,char *,nptr,char **,endptr,int,base)
 #ifndef __STDC_ABI_ONLY
 extern uint32_t __LIB__ strtoul_callee(char *nptr,char **endptr,int base) __smallc __z88dk_callee;
 #define strtoul(a,b,c) strtoul_callee(a,b,c)
