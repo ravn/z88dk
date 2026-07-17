@@ -257,7 +257,7 @@ does not. `%f` formatting needs the separate nanoprintf closure
 `va_start` (ravn/llvm-z80#270) — use the non-variadic `npf_snprintf_f` formatter
 for `double` output until that is fixed.
 
-# KNOWN GAP: variadic stdio return value (printf/sprintf/scanf family)
+# KNOWN GAP: variadic stdio return value (printf/sprintf/scanf family) — ravn/z88dk#31
 
 **Symptom (verified 2026-07-17, ntvcm):** the variadic stdio functions format /
 parse CORRECTLY but their **return value is garbage**:
