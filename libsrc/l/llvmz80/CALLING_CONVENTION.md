@@ -217,3 +217,42 @@ there is nothing to fix for clang in the fd-layer; do not add fd-layer bridges.
    global worker exists; else Strategy A (hand-asm `___name`).
 6. Red-green: add a `test/clang/runtime_*.{c,sh}` case, prove it fails before /
    passes after (ntvcm for stdout-only; MAME for file I/O).
+
+# Floating-point runtime (`double`) — the `LLVMZ80RTLIB` archive
+
+clang lowers every `double` operation to compiler-rt soft-float libcalls
+(`__adddf3`/`__subdf3`/`__muldf3`/`__divdf3`, the comparisons, and the
+conversions `__floatsidf`/`__fixdfsi`/`__extendsfdf2`/`__truncdfsf2`). z88dk's
+classic clib does **not** supply these (its own small floats are 48-bit math48 /
+MBF, a different bit layout — incompatible with clang's IEEE-754 `double`), so
+the runtime ships **with the llvm-z80 clang binary**, not inside z88dk (the
+compiler-rt model). It is packaged as a z80asm `.lib` archive
+`softfloat_cpm_z80.lib` (built by `llvmz80-softfloat/tools/build_softfloat_lib.sh`;
+a Berkeley-SoftFloat f64 closure + the compiler-rt-named shims + the i64
+runtime).
+
+**Auto-link:** `zcc` appends the archive to the link line for
+`-compiler=llvmz80` when the config/env var **`LLVMZ80RTLIB`** points at it
+(full path, WITHOUT the `.lib` suffix; env wins over the config file, exactly
+like `LLVMZ80EXE`). It is empty by default because the install location is
+outside z88dk:
+
+```sh
+export LLVMZ80RTLIB=/path/to/llvm-z80/lib/softfloat_cpm_z80   # no .lib suffix
+zcc +cpm -compiler=llvmz80 -o prog prog.c                     # no explicit -l
+```
+
+Because it is an **archive**, the linker discards every unreferenced module: an
+integer-only program that never touches a `double` links **byte-identically**
+whether or not `LLVMZ80RTLIB` is set (verified: 7224 B either way). So the
+auto-link is unconditional for `-compiler=llvmz80` (guarded only by the var
+being set and an actual program link, not `-c` / `--make-lib`) — there is no
+need to scan for float symbols first.
+
+Known limitation: the `(double)int` conversion path (`__floatsidf`) is currently
+miscompiled by the backend — tracked as **ravn/llvm-z80#273**. Literal doubles
+and arithmetic on already-`double` values work; converting an `int` to `double`
+does not. `%f` formatting needs the separate nanoprintf closure
+(`build_fmt.sh`), and z88dk's variadic `printf("%f")` is blocked by broken
+`va_start` (ravn/llvm-z80#270) — use the non-variadic `npf_snprintf_f` formatter
+for `double` output until that is fixed.

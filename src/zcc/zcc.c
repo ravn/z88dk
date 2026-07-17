@@ -380,6 +380,17 @@ static char  *coptrules_cpu = NULL;
 static char  *c_ez80clang_opt = NULL;
 static char  *c_llvmz80_opt = NULL;
 static char  *c_llvmz80_postproc = NULL;
+/* -compiler=llvmz80 f64 runtime archive (Berkeley-SoftFloat closure) that
+ * resolves the compiler-rt soft-float libcalls clang emits for `double`
+ * (__adddf3/__floatsidf/...).  It ships ALONGSIDE the llvm-z80 clang binary
+ * (compiler-rt model), NOT inside z88dk, so there is no sensible DESTDIR
+ * default -- leave it empty and let the user point LLVMZ80RTLIB at the
+ * installed lib (full path, WITHOUT the .lib extension; env wins over the
+ * config file, like LLVMZ80EXE).  When set, it is appended to the link line
+ * as -l<path>; because it is a .lib ARCHIVE the linker strips every
+ * unreferenced module, so an integer-only program that never touches a double
+ * pays exactly zero bytes for it. */
+static char  *c_llvmz80_rtlib = NULL;
 static char  *c_80cc_opt = NULL;
 static char  *c_xcc_opt = NULL;
 static char  *c_sdccopt1 = NULL;
@@ -460,6 +471,7 @@ static arg_t  config[] = {
     { "EZ80CLANGRULES", 0, SetStringConfig, &c_ez80clang_opt, NULL, "Rules for ez80 clang", "DESTDIR/lib/clang_rules.1"},
     { "LLVMZ80RULES", 0, SetStringConfig, &c_llvmz80_opt, NULL, "copt rules for ravn/llvm-z80 clang", "DESTDIR/lib/llvmz80/llvmz80_rules.1"},
     { "LLVMZ80POSTPROC", 0, SetStringConfig, &c_llvmz80_postproc, NULL, "Post-copt bridge script for ravn/llvm-z80 clang", "DESTDIR/lib/llvmz80/bridge_postproc.sh"},
+    { "LLVMZ80RTLIB", 0, SetStringConfig, &c_llvmz80_rtlib, NULL, "f64 soft-float runtime archive for ravn/llvm-z80 clang (full path, no .lib suffix; ships with the clang binary)", NULL},
     { "80CCRULES", 0, SetStringConfig, &c_80cc_opt, NULL, "Options for 80cc", "DESTDIR/lib/80cc_rules.1"},
     { "XCCRULES", 0, SetStringConfig, &c_xcc_opt, NULL, "Options for xcc", "DESTDIR/lib/xcc_rules.1"},
     { "SDCCOPT1", 0, SetStringConfig, &c_sdccopt1, NULL, "", "\"DESTDIR/lib/sdcc/sdcc_opt.1\"" },
@@ -1230,6 +1242,20 @@ int main(int argc, char **argv)
         BuildOptions(&linker_linklib_first, linker_linklib_last);
     if (linker_linklib_first)
         BuildOptions_start(&linklibs, linker_linklib_first);
+
+    /* -compiler=llvmz80: auto-link the f64 soft-float runtime archive so that
+     * `double` programs resolve __adddf3/__floatsidf/... with no explicit -l.
+     * It is a .lib archive, so the linker discards every unreferenced module
+     * -> an integer-only program pays zero bytes.  Only meaningful when
+     * actually linking a program (not -c / --make-lib) and when the user has
+     * pointed LLVMZ80RTLIB at the installed lib (empty by default). */
+    if (compiler_type == CC_LLVMZ80 && !compileonly && !makelib &&
+        c_llvmz80_rtlib && *c_llvmz80_rtlib) {
+        char *rtarg;
+        zcc_asprintf(&rtarg, "-l\"%s\"", c_llvmz80_rtlib);
+        BuildOptions(&linklibs, rtarg);
+        free(rtarg);
+    }
 
     if (printmacros)
     {
@@ -3488,6 +3514,14 @@ static void configure_compiler(void)
             char *env_llvmz80 = getenv("LLVMZ80EXE");
             if (env_llvmz80 && *env_llvmz80)
                 c_llvmz80_exe = env_llvmz80;
+        }
+        /* Same env-over-config override for the f64 soft-float runtime archive
+         * (see c_llvmz80_rtlib) so it can be pointed at the installed lib
+         * per-invocation.  Appended to the link line further below. */
+        {
+            char *env_rtlib = getenv("LLVMZ80RTLIB");
+            if (env_rtlib && *env_rtlib)
+                c_llvmz80_rtlib = env_rtlib;
         }
 
         compiler_type = CC_LLVMZ80;
