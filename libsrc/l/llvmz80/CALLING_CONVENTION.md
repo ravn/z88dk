@@ -256,3 +256,43 @@ does not. `%f` formatting needs the separate nanoprintf closure
 (`build_fmt.sh`), and z88dk's variadic `printf("%f")` is blocked by broken
 `va_start` (ravn/llvm-z80#270) — use the non-variadic `npf_snprintf_f` formatter
 for `double` output until that is fixed.
+
+# KNOWN GAP: variadic stdio return value (printf/sprintf/scanf family)
+
+**Symptom (verified 2026-07-17, ntvcm):** the variadic stdio functions format /
+parse CORRECTLY but their **return value is garbage**:
+
+| call                              | side effect | returned | correct |
+|-----------------------------------|-------------|----------|---------|
+| `printf("hello %d\n",5)`          | `hello 5`   | -332     | 8       |
+| `snprintf(b,n,"%d-%d",3,4)`       | `3-4`       | -346     | 3       |
+| `sprintf(b,"%d",...)`             | correct     | -346     | 14      |
+| `sscanf("12 34 word","%d %d %s")` | a/c/nm ok   | -362     | 3       |
+
+**Root cause (verified from source + a control):** the classic clib's sdcc
+entry points return the 16-bit int in **HL** (see
+`libsrc/classic/stdio/_sprintf.asm`: `call asm_printf` → count in HL →
+`ex de,hl … ex de,hl` → `ret` with the count in HL). clang's default
+`sdcccall(1)` reads a 16-bit int return from **DE** (§ top of this file). A
+minimal control (an asm fn loading `de,0x1234 / hl,14 / ret`, called as `int`
+from clang) returns **4660 (0x1234 = DE)**, not 14 — proving clang reads DE.
+
+The `__ZPROTO` bridges convert this correctly (they end `ex de,hl / ret`), but
+the printf family is NOT bridged: for clang `__vasmallc` expands to **empty**
+(`include/sys/compiler.h:37`), so `int printf(const char*,...)` is a plain
+variadic decl with clang's default DE return, calling `_printf`/`_sprintf`
+directly. No HL→DE conversion happens → the caller reads DE = garbage. Args
+work because varargs are stack-passed (R2L), which both sides agree on.
+
+**Scope:** every variadic stdio fn that returns a count — `printf`, `fprintf`,
+`sprintf`, `snprintf`, `scanf`, `fscanf`, `sscanf`, `vfprintf`, `vsnprintf`.
+Output-only code is unaffected; code that checks the count
+(`if (sscanf(...)==3)`, `n = snprintf(...)`) misbehaves.
+
+**Fix direction (NOT a simple __ZPROTO bridge):** a naive `call _real / ex de,hl
+/ ret` thunk cannot be used — the extra `call` return address shifts the vararg
+frame the classic worker reads at `sp+2`. It needs a return-address-interposing
+trampoline (pop caller ret, jp to `_real` with a patched return that does
+`ex de,hl`), or a per-fn clang re-implementation. Distinct from #270 (nanoprintf
+`va_start`, which is a separate formatter); z88dk's own printf reads its varargs
+fine.
