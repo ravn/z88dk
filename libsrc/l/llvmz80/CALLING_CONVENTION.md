@@ -94,3 +94,126 @@ default (which then needs a hand-asm marshalling bridge like an early draft of
    annotation can express the mismatch (e.g. a single-arg function with no
    fastcall/callee entry, or a register↔stack conversion the ZPROTO swapper
    can't do).
+
+---
+
+# The `__ZPROTO` family — how the header macros wire clang → classic clib
+
+Many clib prototypes in `include/**` are written with the `__ZPROTO2/3/3N/4/5`
+macros from `include/sys/proto.h` instead of a plain `extern`. This section
+documents exactly what they expand to for clang (`-compiler=llvmz80`), the
+register/stack contract the generated `___name` low-level must satisfy, and how
+to implement or verify a bridge for one. Everything here was verified by
+disassembling this clang's output (2026-07-17); re-verify with the same method
+if the backend changes.
+
+## What the macro expands to
+
+`include/sys/proto.h` has three branches per arity: `__SCCZ80`, `__SDCC`, and a
+clang/other `#else`. For sccz80/sdcc the macro is just a `__smallc` prototype in
+natural order. For clang, `__ZPROTON(r,,name, t1,a1, … tN,aN)` expands to:
+
+```c
+/* low-level: params in REVERSED order, DEFAULT sdcccall(1) convention (NO __smallc) */
+extern r __name(tN aN, …, t1 a1);
+/* public entry: header-only, always-inlined, natural order, just reorders + tail-calls */
+__attribute__((always_inline))
+static inline r name(t1 a1, …, tN aN)
+    __attribute__((overloadable)) __attribute__((enable_if(1, "")))
+    { return __name(aN, …, a1); }
+```
+
+So a call `name(a1,…,aN)` in user code inlines to a call of the low-level
+`__name(aN,…,a1)`. clang prepends one leading underscore to the asm symbol, so
+the C identifier `__name` is emitted as **`___name`** (triple underscore) — that
+is the symbol a bridge must define. (`overloadable`/`enable_if(1,"")` let the
+inline coexist with a same-named macro and force inlining; they have no ABI
+effect.)
+
+## The `___name` low-level contract (what a bridge must accept)
+
+Because the low-level params are `(aN, …, a1)` under the **sdcccall(1)** default
+(see the top of this file), for the common 16-bit (int/pointer) case:
+
+| low-level param # | value (natural arg) | location            |
+|-------------------|---------------------|---------------------|
+| 1                 | `aN` (LAST nat arg) | `HL`                |
+| 2                 | `a(N-1)`            | `DE`                |
+| 3, 4, …           | `a(N-2)`, `a(N-3)`… | stack, pushed R-to-L: **arg pushed first = deepest**; param 3 (`a(N-2)`) ends up **on top**, just above the return address |
+
+- **Return value**: the bridge must return in **`DE`** (sdcccall(1): 16-bit ret in
+  DE, 8-bit in A, 32-bit in **DE:HL** = DE low, HL high). Classic `asm_*` workers
+  return in `HL` (or DE:HL for 32-bit), so a bridge typically ends `ex de,hl / ret`.
+- **Stacked-arg cleanup depends on the RETURN WIDTH** (verified empirically
+  2026-07-17, `extern int fi(int,int,int)` vs `extern long fl(int,int,int)`):
+  - **≤16-bit return (int/pointer/char): callee-cleans.** clang emits NO cleanup
+    after the `call`; the bridge itself must consume its stacked args before
+    `ret` (e.g. `pop hl` (retaddr) / `ex (sp),hl` to drop one stacked word).
+  - **32-bit return (`long`): caller-cleans.** clang emits `pop af`×(stacked
+    words) AFTER the `call`; the bridge must leave the stacked args in place and
+    just `ret`.
+  This is why the two shipped bridges differ (both correct):
+  `___strncmp` (returns `int` → callee-cleans, consumes `s1` via `pop hl / ex
+  (sp),hl`) vs `___strtol` (returns `long` → caller-cleans, leaves `base` on the
+  stack for the caller's `pop af`). Getting this backwards corrupts SP — it was a
+  real bug in the first strtol bridge (see the strtol.asm history / session
+  2026-07-16c). **Match the cleanup side to the return width, not to a habit.**
+
+## `__ZPROTO3N` — natural (non-reversed) order
+
+`__ZPROTO3N` is identical to `__ZPROTO3` **except the low-level keeps natural
+order**: `__name(a1,a2,a3)` → `HL=a1, DE=a2, stack=a3`. Use it when the classic
+`asm_*` worker already wants `HL=a1, DE=a2` (so the bridge only has to fetch the
+one stacked arg into the register the worker expects, no HL/DE swap dance).
+Shipped example: `___strtol`/`___strtoul` (`asm_strtol` enters `HL=nptr,
+DE=endptr, BC=base`; the bridge only reads `base` off the stack into BC).
+
+## Two ways to satisfy the low-level — and when NOT to use `__ZPROTO`
+
+1. **`__ZPROTO` + a hand-asm register bridge (Strategy A).** Keep the header on
+   the `__ZPROTO` macro and write a `___name:` marshaller in the worker's `.asm`
+   that moves HL/DE/stack into the `asm_*` worker's expected registers, does
+   `ex de,hl`, and cleans the stack per the return-width rule above. Used by the
+   14 string functions (`libsrc/string/c/sccz80/*.asm`) and strtol/strtoul.
+2. **Bypass `__ZPROTO`, rebind the low-level to the `__smallc` worker directly
+   (Strategy B).** Do NOT use the macro; in the header write, under `#if
+   defined(__LLVMZ80)`, `extern r __name(<reversed params>) __smallc
+   __asm__("<classic global worker>");` plus a natural-order forwarding inline.
+   clang then stack-marshals the whole call straight into the classic `__smallc`
+   worker — **no asm bridge, and no `ex de,hl`** (the worker returns HL and clang
+   adds the `ex de,hl` itself). This is the maintainer-preferred "least asm"
+   style and is what the **stdio FILE\* layer** uses (fopen/freopen/fread/fwrite/
+   fclose/ftell/fseek/rename/remove in `include/stdio.h`). It is only possible
+   when a classic `__smallc` GLOBAL worker with the matching semantics exists.
+
+Preferred order stays: annotation (Strategy B) > tiny `defc` alias > hand-asm
+bridge (Strategy A). Strategy A is only needed when the target function is not a
+plain `__smallc` global (e.g. it has a register-passing `asm_*` core the bridge
+must adapt).
+
+## POSIX fd-layer (`open`/`creat`/`read`/`write`/`close`/`lseek`) on CP/M — DUMMY
+
+`<fcntl.h>` declares these with `__ZPROTO3`/`__ZPROTO2`, so clang emits
+`call ___open` / `___read` / `___write` (and `call _close` for the plain
+`close`). **On the classic `+cpm` target they resolve to
+`libsrc/classic/fcntl/dummy/*.asm` — intentional no-op stubs** (`open`→`ld hl,-1`
+= error, `read`/`write`/`close`→bare `ret`). Those stubs already
+`PUBLIC open / _open / ___open`, so clang links against them and needs **no
+bridge** — the POSIX integer-fd layer simply does not exist on CP/M for ANY
+compiler (sccz80/sdcc/clang alike). Real CP/M file I/O goes through the **stdio
+`FILE*` layer**, which is complete and MAME-verified (16/16, `stdiotst.c`). So
+there is nothing to fix for clang in the fd-layer; do not add fd-layer bridges.
+
+## Checklist to add/verify a `__ZPROTO` bridge
+
+1. Read the macro arity in the header → know natural arg order `a1..aN`.
+2. Low-level is `___name`; args land `HL=aN, DE=a(N-1), stack=a(N-2)…a1`
+   (reversed) unless it is `__ZPROTO3N` (natural `HL=a1,DE=a2,stack=a3…`).
+3. Return in `DE` (16-bit) / `A` (8-bit) / `DE:HL` (32-bit) — bridge usually ends
+   `ex de,hl / ret`.
+4. Cleanup: **int/ptr return → callee-cleans (bridge drops stacked args);
+   long return → caller-cleans (bridge leaves them).**
+5. Prefer Strategy B (`__smallc __asm__("worker")`, no asm) if a `__smallc`
+   global worker exists; else Strategy A (hand-asm `___name`).
+6. Red-green: add a `test/clang/runtime_*.{c,sh}` case, prove it fails before /
+   passes after (ntvcm for stdout-only; MAME for file I/O).
