@@ -297,8 +297,19 @@ sccz80/sdcc are unaffected. Red-green validated with the differential oracle
 `snprintf`/`sscanf`/`fprintf` all converge with the ez80-clang reference after
 the fix and diverge with it reverted.
 
-**Still open (separate bug, NOT #31):** the `va_list` variants `vfprintf` /
-`vsnprintf` (and `vprintf`/`vsprintf` macros) are declared without `__vasmallc`,
-so the fix does not reach them — and they are broken on BOTH clang backends
-(garbage output, not just a wrong count), which points at the `va_start`/va_list
-marshalling bug **ravn/llvm-z80#270**, not the return-register gap. Track there.
+**Also fixed (same root cause, `va_list` variants):** `vfprintf` / `vsnprintf`
+/ `vfscanf` / `vsscanf` are declared with fixed args ending in `void *ap`, so
+the `__vasmallc` change above does not reach them. Their classic workers are
+plain `__smallc` (all args on the stack, count returned in HL — verified in
+`_vsnprintf.asm` / `_vsscanf.asm`, which read the first arg at `sp+2` and end
+`ex de,hl / ret`). They are now declared `__smallc` under `#if defined(__LLVMZ80)`
+in `include/stdio.h`, which is byte-for-byte the marshalling those workers
+expect (natural param order — first arg on top). Verified GREEN with a
+self-checking regression (`llvmz80-softfloat/tests/vfamily/v_family_selfcheck.c`):
+a `va_start`/`vsnprintf` wrapper formats `"[%s]%d,%d,%c"` -> `"[hi]100,-7,Z"`
+(count 12) and a `vsscanf` wrapper parses `"11 22"` -> `x=11 y=22` (count 2);
+both fail with the declaration reverted. This is NOT blocked by the va_list bug
+**ravn/llvm-z80#270** — that bug affects nanoprintf's own `va_start`, not
+z88dk's classic v* forwarding. (ez80-clang's own v* path is separately broken —
+`vsnprintf` -> `"0-0"` — so the ez80-clang diff oracle can't cover this family;
+the self-check asserts absolute values instead.)
