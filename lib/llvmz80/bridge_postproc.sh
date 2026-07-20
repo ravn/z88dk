@@ -49,12 +49,21 @@ perl "$HERE/splitquad.pl" | "$COPT" "$CPUARG" "$RULES" | perl "$HERE/fixlabels.p
       print "\tSECTION bss_compiler"
       for(i=1;i<=nc;i++){ print cn[i] ":"; print "\tDEFS " cs[i] }
     }
-  }' | grep -v '__do_zero_bss' | grep -v 'Declaring this symbol' \
-     | perl -pe '
-        # Relax conditional jr to jp.  clang emits jr cc,label where the
-        # assembled distance can exceed the +-127 B z80asm limit (llvm-z80 #267).
-        # jp cc,label is always safe (3 B vs 2 B; 1-byte penalty per site).
-        # Unconditional "jr label" (within a single TU) is safe by construction:
-        # clang only emits it for short local branches.  We leave those alone.
-        s/\bjr\s+(c|nc|z|nz|pe|po|p|m)\s*,/jp $1,/gi;
-     '
+  }' | grep -v '__do_zero_bss' | grep -v 'Declaring this symbol'
+# NOTE (ravn/llvm-z80#267, removed 2026-07-21): there used to be a final
+#   perl -pe 's/\bjr\s+(c|nc|z|nz|pe|po|p|m)\s*,/jp $1,/gi;'
+# stage here that rewrote every conditional `jr cc` -> `jp cc`.  It was a
+# workaround from when clang's BranchRelaxation undercounted expanded pseudos
+# (sized 0 in getInstSizeInBytes) and left out-of-range conditional jr in the
+# textual .s.  That workaround was BOTH redundant and harmful:
+#   * redundant: clang's Z80 backend already relaxes conditional jr itself
+#     (isBranchOffsetInRange covers JR_Z/NZ/C/NC; insertBranch emits jr in-range
+#     / jp out-of-range), so it never emits an out-of-range conditional jr.
+#   * harmful: rewriting jr cc (2 B) -> jp cc (3 B) inflates the code by 1 B per
+#     site AFTER clang has already run BranchRelaxation, growing the span of an
+#     enclosing UNCONDITIONAL `jr` that clang correctly left in place at <=127 B
+#     in its own model.  A single intervening jr->jp tipped fmt64.c @ -O2 from
+#     127 to 128 ($80) -> z80asm "integer range".
+# The proper fix is the #267 systemic getInstSizeInBytes sizing in the backend;
+# with that in place clang's jr/jp choice is authoritative and the assembled
+# bytes match its model exactly.  Do NOT reintroduce a jr<->jp rewrite here.
