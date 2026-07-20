@@ -86,6 +86,20 @@
 #define __smallc __attribute__((sdcccall(0)))
 #define __z88dk_callee __attribute__((z80_callee))
 #define __z88dk_fastcall __attribute__((z80_fastcall))
+
+// ravn/z88dk#31: the variadic stdio family (printf/sprintf/scanf/...) returns
+// its count in HL (the classic clib convention).  llvmz80's default sdcccall(1)
+// reads a 16-bit return from DE, so an unannotated variadic decl reads garbage
+// (the count is wrong; formatting/parsing are fine because varargs are stacked
+// either way).  Declaring the family __smallc == sdcccall(0) makes clang read
+// the return from HL, matching the worker.  The sccz80 branch already sets
+// `__vasmallc __smallc`; it was simply missing for llvmz80 when __smallc was
+// wired to sdcccall(0).  Guarded to __LLVMZ80: ez80-clang (__stdc, HL return)
+// is already correct and must not be touched (it may not support sdcccall).
+#if defined(__LLVMZ80)
+#undef  __vasmallc
+#define __vasmallc __smallc
+#endif
 #endif
 
 #else

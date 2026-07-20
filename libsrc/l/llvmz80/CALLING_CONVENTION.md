@@ -257,42 +257,48 @@ does not. `%f` formatting needs the separate nanoprintf closure
 `va_start` (ravn/llvm-z80#270) — use the non-variadic `npf_snprintf_f` formatter
 for `double` output until that is fixed.
 
-# KNOWN GAP: variadic stdio return value (printf/sprintf/scanf family) — ravn/z88dk#31
+# FIXED: variadic stdio return value (printf/sprintf/scanf family) — ravn/z88dk#31
 
-**Symptom (verified 2026-07-17, ntvcm):** the variadic stdio functions format /
-parse CORRECTLY but their **return value is garbage**:
+**Was (verified 2026-07-17, ntvcm):** the variadic stdio functions formatted /
+parsed CORRECTLY but their **return value was garbage** (`printf("hello %d",5)`
+returned -332 not 8; `sscanf(...)` returned -362 not 3; etc.).
 
-| call                              | side effect | returned | correct |
-|-----------------------------------|-------------|----------|---------|
-| `printf("hello %d\n",5)`          | `hello 5`   | -332     | 8       |
-| `snprintf(b,n,"%d-%d",3,4)`       | `3-4`       | -346     | 3       |
-| `sprintf(b,"%d",...)`             | correct     | -346     | 14      |
-| `sscanf("12 34 word","%d %d %s")` | a/c/nm ok   | -362     | 3       |
+**Root cause (a z88dk header bug, verified 2026-07-20):** the classic clib
+workers return the 16-bit count in **HL** (see `libsrc/classic/stdio/_sprintf.asm`
+etc.). clang's default `sdcccall(1)` reads a 16-bit int return from **DE**. The
+variadic decls carried **no convention attribute**: for clang `__vasmallc`
+expanded to **empty** (`include/sys/compiler.h`), so `int printf(const char*,...)`
+used the default sdcccall(1) and read DE = garbage. (Args always worked because
+varargs are stack-passed R2L, which both sides agree on.) The **sccz80** branch
+already set `#define __vasmallc __smallc`; the clang/sdcc branch just never did —
+so when `__smallc` was wired to `sdcccall(0)` for clang, the variadic family was
+left out.
 
-**Root cause (verified from source + a control):** the classic clib's sdcc
-entry points return the 16-bit int in **HL** (see
-`libsrc/classic/stdio/_sprintf.asm`: `call asm_printf` → count in HL →
-`ex de,hl … ex de,hl` → `ret` with the count in HL). clang's default
-`sdcccall(1)` reads a 16-bit int return from **DE** (§ top of this file). A
-minimal control (an asm fn loading `de,0x1234 / hl,14 / ret`, called as `int`
-from clang) returns **4660 (0x1234 = DE)**, not 14 — proving clang reads DE.
+**Fix (`include/sys/compiler.h`, llvmz80-guarded one-liner):**
 
-The `__ZPROTO` bridges convert this correctly (they end `ex de,hl / ret`), but
-the printf family is NOT bridged: for clang `__vasmallc` expands to **empty**
-(`include/sys/compiler.h:37`), so `int printf(const char*,...)` is a plain
-variadic decl with clang's default DE return, calling `_printf`/`_sprintf`
-directly. No HL→DE conversion happens → the caller reads DE = garbage. Args
-work because varargs are stack-passed (R2L), which both sides agree on.
+    #if defined(__LLVMZ80)
+    #undef  __vasmallc
+    #define __vasmallc __smallc     /* sdcccall(0): clang reads the HL return */
+    #endif
 
-**Scope:** every variadic stdio fn that returns a count — `printf`, `fprintf`,
-`sprintf`, `snprintf`, `scanf`, `fscanf`, `sscanf`, `vfprintf`, `vsnprintf`.
-Output-only code is unaffected; code that checks the count
-(`if (sscanf(...)==3)`, `n = snprintf(...)`) misbehaves.
+Verified at codegen level (2026-07-20): a variadic call marked `sdcccall(0)`
+reads the return from **HL** (`call foo / ld (dst),hl`, no `ex de,hl`), while the
+default `sdcccall(1)` inserts `ex de,hl` (reading DE). Since the worker returns
+in HL, `sdcccall(0)` is the match. Both push all args R2L / caller-clean
+identically, so nothing else changes. **No asm trampoline was needed** — the
+earlier "return-address-interposing trampoline" idea was superseded: it applies
+only to an asm *thunk*, whereas the attribute changes clang's own call-site
+codegen with no extra frame.
 
-**Fix direction (NOT a simple __ZPROTO bridge):** a naive `call _real / ex de,hl
-/ ret` thunk cannot be used — the extra `call` return address shifts the vararg
-frame the classic worker reads at `sp+2`. It needs a return-address-interposing
-trampoline (pop caller ret, jp to `_real` with a patched return that does
-`ex de,hl`), or a per-fn clang re-implementation. Distinct from #270 (nanoprintf
-`va_start`, which is a separate formatter); z88dk's own printf reads its varargs
-fine.
+**Guarded to `__LLVMZ80`** (set only for llvmz80 at `src/zcc/zcc.c:3472`):
+ez80-clang (`__stdc`, HL return) was already correct and must not be touched;
+sccz80/sdcc are unaffected. Red-green validated with the differential oracle
+(`llvmz80-softfloat/tools/diff_ez80clang_llvmz80.sh`): `printf`/`sprintf`/
+`snprintf`/`sscanf`/`fprintf` all converge with the ez80-clang reference after
+the fix and diverge with it reverted.
+
+**Still open (separate bug, NOT #31):** the `va_list` variants `vfprintf` /
+`vsnprintf` (and `vprintf`/`vsprintf` macros) are declared without `__vasmallc`,
+so the fix does not reach them — and they are broken on BOTH clang backends
+(garbage output, not just a wrong count), which points at the `va_start`/va_list
+marshalling bug **ravn/llvm-z80#270**, not the return-register gap. Track there.
