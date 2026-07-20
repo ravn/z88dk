@@ -207,8 +207,22 @@ extern int __LIB__ fileno(FILE *stream) __smallc __z88dk_fastcall;
 
 /* Our new and improved functions!! */
 
+#if defined(__LLVMZ80)
+/* ravn/llvm-z80: same register-vs-stack mismatch as fread/fwrite (the generic
+ * __ZPROTO2/3 clang branch tail-calls the classic worker with args in HL/DE,
+ * but _fopen/_freopen are __smallc stack workers) -> fopen returned a non-NULL
+ * but never-opened FILE* (a subsequent fwrite finds no _IOWRITE flag and writes
+ * 0 bytes).  Bind straight to the classic worker via a reversed-param __smallc
+ * prototype so clang pushes the args in the exact order the worker reads them.
+ * See libsrc/l/llvmz80/CALLING_CONVENTION.md.  sccz80/sdcc keep __ZPROTO. */
+extern FILE __LIB__ *__fopen_llvmz80(const char *mode, const char *name) __asm__("fopen") __smallc;
+extern FILE __LIB__ *__freopen_llvmz80(FILE *fp, const char *mode, const char *name) __asm__("freopen") __smallc;
+#define fopen(name,mode)      __fopen_llvmz80(mode,name)
+#define freopen(name,mode,fp) __freopen_llvmz80(fp,mode,name)
+#else
 __ZPROTO2(FILE,*,fopen,const char *,name, const char *,mode)
 __ZPROTO3(FILE,*,freopen,const char *,name, const char *,mode,FILE *,fp)
+#endif
 __ZPROTO2(FILE,*,fdopen,const int, fileds,const char *,mode)
 
 __ZPROTO4(FILE,*,_freopen1,const char *,name, int, fd, const char *,mode, FILE *,fp)
@@ -221,8 +235,23 @@ extern FILE __LIB__ *funopen(const void     *cookie, int (*readfn)(void *, char 
                     fpos_t (*seekfn)(void *, fpos_t, int), int (*closefn)(void *)) __smallc;
 #endif
 
+#if defined(__LLVMZ80)
+/* ravn/llvm-z80: _fclose is a __smallc stack worker; clang would pass fp in HL.
+ * __smallc makes clang push fp so the stack read matches.  sccz80/sdcc keep
+ * the plain declaration below. */
+extern int __LIB__  fclose(FILE *fp) __smallc;
+#else
 extern int __LIB__  fclose(FILE *fp);
+#endif
 extern int __LIB__  fflush(FILE *);
+#if defined(__LLVMZ80)
+/* ravn/llvm-z80: the classic clib's _fflush is __smallc (fetches its FILE*
+ * off the stack), but clang passes it in HL -> the worker reads stack garbage
+ * and corrupts SP, making the program restart in a loop at exit.  Route to a
+ * register-ABI wrapper (libsrc/l/llvmz80/__fflush.asm).  sccz80/sdcc unaffected. */
+extern int __LIB__  fflush_fastcall(FILE *) __z88dk_fastcall;
+#define fflush(a) fflush_fastcall(a)
+#endif
 
 extern void __LIB__ closeall(void);
 
@@ -248,12 +277,15 @@ extern int __LIB__  fputc_callee(int c, FILE *fp) __smallc __z88dk_callee;
 #define putc(bp,fp) fputc_callee(bp,fp)
 #define putchar(bp) fputc_callee(bp,stdout)
 #else
-// clang expects putchar to be a library function not just a macro
-extern int putchar(int);
+// clang expects putchar to be a library function not just a macro.
+// __smallc carries the stack calling convention (sdcccall(0)) so clang pushes
+// the argument instead of leaving it in HL -- without it console output is
+// corrupted (see include/sys/compiler.h).
+extern int __LIB__ putchar(int) __smallc;
 #define putc(bp,fp) fputc(bp,fp)
 #endif
 
-extern int __LIB__ fgetc(FILE *fp);
+extern int __LIB__ fgetc(FILE *fp) __smallc;
 #define getc(f) fgetc(f)
 
 __ZPROTO2(int,,ungetc,int,c,FILE *,fp)
@@ -271,7 +303,7 @@ extern int __LIB__ ferror_fastcall(FILE *fp) __z88dk_fastcall;
 #define ferror(f) ferror_fastcall(f)
 #endif
 
-extern int __LIB__ puts(const char *);
+extern int __LIB__ puts(const char *) __smallc;
 
 #ifdef __STDC_ABI_ONLYe
 
@@ -280,11 +312,22 @@ extern int __LIB__ puts(const char *);
 
 
 /* Routines for file positioning */
+#if defined(__LLVMZ80)
+extern fpos_t __LIB__ ftell(FILE *fp) __smallc;
+#else
 extern fpos_t __LIB__ ftell(FILE *fp);
+#endif
 __ZPROTO2(int,,fgetpos,FILE *,fp,fpos_t *, pos)
 
 
-#ifndef __STDC_ABI_ONLY
+#if defined(__LLVMZ80)
+/* classic _fseek is __smallc (stack), worker fseek(fp,offset,whence); the
+ * __STDC_ABI_ONLY branch below routes clang to a register low-level (___fseek)
+ * that does not match.  Bind the reversed-param low-level to the GLOBAL worker
+ * so clang's __smallc push order reproduces the worker's stack frame. */
+extern int __LIB__ __fseek_llvmz80(int whence, fpos_t offset, FILE *fp) __asm__("fseek") __smallc;
+#define fseek(fp,offset,whence) __fseek_llvmz80(whence,offset,fp)
+#elif !defined(__STDC_ABI_ONLY)
 extern int __LIB__ __SAVEFRAME__ fseek(FILE *fp, fpos_t offset, int whence) __smallc;
 #else
 __ZPROTO3(int,,fseek,FILE *,fp,fpos_t,offset,int,whence)
@@ -294,8 +337,25 @@ __ZPROTO3(int,,fseek,FILE *,fp,fpos_t,offset,int,whence)
 
 
 /* Block read/writing */
+#if defined(__LLVMZ80)
+/* ravn/llvm-z80: the classic clib workers _fread/_fwrite are __smallc
+ * (sdcccall(0)) and read every arg off the stack with (deepest..top)
+ * ptr,size,nmemb,fp -- i.e. fp on top.  The generic __ZPROTO4 clang branch
+ * instead declares a register-ABI low-level (___fread/___fwrite) that nothing
+ * defines, so fread/fwrite failed to link.  Bind straight to the classic
+ * worker via a reversed-param __smallc prototype: clang's sdcccall(0) push
+ * puts the FIRST declared param on top, so declaring fp first reproduces the
+ * exact stack layout the worker wants, clang caller-cleans (matching the
+ * worker) and moves the HL return into DE itself -- no asm bridge needed.
+ * See libsrc/l/llvmz80/CALLING_CONVENTION.md.  sccz80/sdcc keep __ZPROTO4. */
+extern int __LIB__ __fread_llvmz80(FILE *fp, size_t num, size_t size, void *ptr) __asm__("fread") __smallc;
+extern int __LIB__ __fwrite_llvmz80(FILE *fp, size_t num, size_t size, void *ptr) __asm__("fwrite") __smallc;
+#define fread(ptr,size,num,fp)  __fread_llvmz80(fp,num,size,ptr)
+#define fwrite(ptr,size,num,fp) __fwrite_llvmz80(fp,num,size,ptr)
+#else
 __ZPROTO4(int,,fread,void *,ptr,size_t,size,size_t,num,FILE *,fp)
 __ZPROTO4(int,,fwrite,void *,ptr,size_t,size,size_t,num,FILE *,fp)
+#endif
 
 
 extern char __LIB__ *gets(char *s);
@@ -304,8 +364,19 @@ extern int __LIB__ printf(const char *fmt,...) __vasmallc;
 extern int __LIB__ fprintf(FILE *f,const char *fmt,...) __vasmallc;
 extern int __LIB__ sprintf(char *s,const char *fmt,...) __vasmallc;
 extern int __LIB__ snprintf(char *s,size_t n,const char *fmt,...) __vasmallc;
+#if defined(__LLVMZ80)
+/* ravn/llvm-z80: _vfprintf/_vsnprintf are __smallc stack workers returning the
+ * count in HL; clang's default sdcccall(1) would pass leading args in HL/DE and
+ * read the return from DE (empty buf + garbage count).  __smallc marshals all
+ * args on the stack (natural order: first arg on top, matching the workers) and
+ * reads HL.  Verified GREEN: a va_start/vsnprintf/va_end wrapper formats
+ * strings/ints/chars correctly with the right return count. */
+extern int __LIB__ vfprintf(FILE *f,const char *fmt,void *ap) __smallc;
+extern int __LIB__ vsnprintf(char *str, size_t n,const char *fmt,void *ap) __smallc;
+#else
 extern int __LIB__ vfprintf(FILE *f,const char *fmt,void *ap);
 extern int __LIB__ vsnprintf(char *str, size_t n,const char *fmt,void *ap);
+#endif
 
 #define vprintf(ctl,arg) vfprintf(stdout,ctl,arg)
 #define vsprintf(buf,ctl,arg) vsnprintf(buf,65535,ctl,arg)
@@ -331,8 +402,16 @@ extern void __LIB__ printn(int number, int radix,FILE *file) __smallc;
 extern int __LIB__ scanf(const char *fmt,...) __vasmallc;
 extern int __LIB__ fscanf(FILE *,const char *fmt,...) __vasmallc;
 extern int __LIB__ sscanf(char *,const char *fmt,...) __vasmallc;
+#if defined(__LLVMZ80)
+/* ravn/llvm-z80: same __smallc bridge as the vfprintf family above.  Verified
+ * GREEN: a va_start/vsscanf/va_end wrapper parses "%d %d" into the caller's
+ * variables with the right conversion count. */
+extern int __LIB__ vfscanf(FILE *, const char *fmt, void *ap) __smallc;
+extern int __LIB__ vsscanf(char *str, const char *fmt, void *ap) __smallc;
+#else
 extern int __LIB__ vfscanf(FILE *, const char *fmt, void *ap); 
 extern int __LIB__ vsscanf(char *str, const char *fmt, void *ap);
+#endif
 #define vscanf(ctl,arg) vfscanf(stdin,ctl,arg)
 
 
@@ -371,9 +450,21 @@ extern void __LIB__ fabandon(FILE *);
 extern long __LIB__ fdtell(int fd);
 __ZPROTO2(int,,fdgetpos,int,fd,fpos_t *,pos)
 /* Rename a file */
+#if defined(__LLVMZ80)
+/* classic worker is rename(oldname,newname), __smallc (stack, first arg on top).
+ * Reverse the low-level params so clang's __smallc push order lands oldname on
+ * top, matching the worker. */
+extern int __LIB__ __rename_llvmz80(const char *d, const char *s) __asm__("rename") __smallc;
+#define rename(s,d) __rename_llvmz80(d,s)
+#else
 __ZPROTO2(int,,rename,const char *,s,const char *,d)
+#endif
 /* Remove a file */
+#if defined(__LLVMZ80)
+extern int __LIB__ remove(const char *name) __smallc;
+#else
 extern int __LIB__ remove(const char *name);
+#endif
 
 
 /* Scan for a keypress using the default keyboard driver */

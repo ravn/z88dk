@@ -1,0 +1,137 @@
+;; ===== llvm-z80 (ravn) clang asm -> z88dk z80asm =====
+
+;; --- strip housekeeping directives ---
+	.file	%1
+=
+
+	.ident	%1
+=
+
+	.addrsig_sym %1
+=
+
+	.addrsig
+=
+
+	.type	%1
+=
+
+	.size	%1
+=
+
+;; --- sections ---
+	.text
+=
+	SECTION code_compiler
+
+	.bss
+=
+	SECTION bss_compiler
+
+	.data
+=
+	SECTION data_compiler
+
+	.section	.rodata.str1.1,%1
+=
+	SECTION rodata_compiler
+
+	.section	.rodata,%1
+=
+	SECTION rodata_compiler
+
+;; clang places mergeable read-only constants (const double[], large
+;; constant pools) in .rodata.cstN (N = 4/8/16/32).  z88dk's z80asm has no
+;; section merging, but the DATA must still be emitted -- without an explicit
+;; rule these fall through to the `.section %1 -> SECTION IGNORE` catch-all
+;; below, silently DROPPING the constants so they read as 0 at runtime
+;; (e.g. a runtime-indexed `static const double tab[]` returns 0.0).
+;; Map them to the ordinary rodata segment.  Verified red-green: a 4-element
+;; const double[] (=.rodata.cst32) returned 0.0 before this rule, correct
+;; value after.
+	.section	.rodata.cst%2,%1
+=
+	SECTION rodata_compiler
+
+	.section	.data.%2,%1
+=
+	SECTION data_compiler
+
+	.section	.data,%1
+=
+	SECTION data_compiler
+
+	.section	.note.GNU-stack,%1
+=
+	SECTION IGNORE
+
+	.section	%1
+=
+	SECTION IGNORE
+
+;; --- symbol visibility ---
+	.globl	%1
+=
+	GLOBAL	%1
+
+;; --- data emission ---
+	.asciz	%1
+=
+	DEFM	%1
+	DEFB	0x00
+
+;; --- indirect call trampoline ---
+;; clang emits `call __call_iy` for function-pointer calls (Z80 has no
+;; CALL (reg) instruction).  Map to z88dk's l_call_iy (= jp (iy)) which
+;; is already indexed and demand-loadable from z80_crt0.lib.
+	call	__call_iy
+=
+	call	l_jpiy
+
+;; --- z88dk intrinsic_label(NAME): the extern marker call becomes a bare
+;;     label so z88dk-ticks -start/-end can gate the cycle counter on it
+;;     (mirrors lib/z80rules.9 for sccz80/sdcc).  Handles the mid-function
+;;     `call` form and the tail-position `jp` form clang emits. ---
+	call	_intrinsic_label_%1
+=
+%1:
+
+	jp	_intrinsic_label_%1
+=
+%1:
+	ret
+
+	.short	%1
+=
+	DEFW	%1
+
+	.long	%1
+=
+	DEFQ	%1
+
+	.byte	%1
+=
+	DEFB	%1
+
+	.zero	%1
+=
+	DEFS	%1
+
+;; --- alignment: Z80 has no alignment requirement, drop it ---
+	.p2align	%1
+=
+
+	.balign	%1
+=
+
+	.align	%1
+=
+
+;; --- drop func-end labels (only referenced by stripped .size) ---
+.Lfunc_end%1:
+=
+
+;; --- dotted local string labels: L_.str -> L__str ---
+L_.str
+=
+L__str

@@ -66,6 +66,20 @@ extern void intrinsic_slp(void) __preserves_regs(a,b,c,d,e,h,l);
 
 #endif
 
+#ifdef __CLANG
+
+// CLANG compiles (ez80-clang and llvmz80)
+// intrinsic_label(NAME) is rewritten into a bare label by the clang asm-bridge
+// copt rules (lib/llvmz80/llvmz80_rules.1) so z88dk-ticks -start/-end can gate
+// the cycle counter on it.  clang has no __preserves_regs attribute, so the
+// marker is a plain extern call; it is hit once (outside timed loops) so any
+// spill around it is a negligible constant.  intrinsic_load16/store16 are not
+// wired for the clang bridge yet (no copt rule) and are intentionally omitted.
+
+#define intrinsic_label(name)  { extern void intrinsic_label_##name(void); intrinsic_label_##name(); }
+
+#endif
+
 #ifdef __SCCZ80
 
 // SCCZ80 Compiles

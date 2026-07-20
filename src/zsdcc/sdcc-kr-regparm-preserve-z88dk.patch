@@ -1,0 +1,32 @@
+Index: src/SDCCsymt.c
+===================================================================
+--- src/SDCCsymt.c	(revision 15248)
++++ src/SDCCsymt.c	(working copy)
+@@ -5219,12 +5219,27 @@
+                       continue;
+                     }
+                   found = true;
++                  /* preserve REGPARM/ARGREG that processFuncArgs set on
++                   * the (now-being-discarded) int-typed default etype.
++                   * Without this, K&R definitions get stack-args ABI
++                   * even under --sdcccall 1, causing silent ABI
++                   * mismatch with ANSI-prototype callers in other TUs. */
++                  bool old_regparm = parLoop->etype ? SPEC_REGPARM (parLoop->etype) : 0;
++                  int  old_argreg  = parLoop->etype ? SPEC_ARGREG  (parLoop->etype) : 0;
+                   /* delete default int type */
+                   Safe_free (parLoop->type);
+                   /* propagate type */
+                   parLoop->type = declLoop->type;
+                   parLoop->etype = declLoop->etype;
+                   parLoop->sym->type = copyLinkChain (parLoop->type);
+                   parLoop->sym->etype = getSpec (parLoop->sym->type);
++                  /* restore REGPARM/ARGREG on the new etype */
++                  if (old_regparm)
++                    {
++                      SPEC_REGPARM (parLoop->etype) = 1;
++                      SPEC_ARGREG  (parLoop->etype) = old_argreg;
++                      SPEC_REGPARM (parLoop->sym->etype) = 1;
++                      SPEC_ARGREG  (parLoop->sym->etype) = old_argreg;
++                    }
+                 }
+             }

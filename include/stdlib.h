@@ -28,10 +28,22 @@ extern int  __LIB__   atoi(const char *s);
 #ifndef __STDC_ABI_ONLY
 extern int  __LIB__   atoi_fastcall(const char *s) __z88dk_fastcall;
 #define atoi(x) atoi_fastcall(x)
+#elif defined(__LLVMZ80)
+/* ravn/llvm-z80: __STDC_ABI_ONLY disables the fastcall routing above, but the
+ * classic clib's plain _atoi is __smallc (stack ABI) while clang passes the
+ * pointer in HL -> mismatch (atoi("123") returned 523).  atoi has no reversed
+ * -arg form to bridge, so route it to atoi_fastcall (z80_fastcall = HL in/out,
+ * already in the lib) to match llvmz80's register ABI. */
+extern int  __LIB__   atoi_fastcall(const char *s) __z88dk_fastcall;
+#define atoi(x) atoi_fastcall(x)
 #endif
 
 extern long __LIB__   atol(const char *s);
 #ifndef __STDC_ABI_ONLY
+extern long __LIB__   atol_fastcall(const char *s) __z88dk_fastcall;
+#define atol(x) atol_fastcall(x)
+#elif defined(__LLVMZ80)
+/* ravn/llvm-z80: route to atol_fastcall for the register ABI (see atoi). */
 extern long __LIB__   atol_fastcall(const char *s) __z88dk_fastcall;
 #define atol(x) atol_fastcall(x)
 #endif
@@ -48,13 +60,13 @@ extern char __LIB__ *ltoa_callee(long num,char *buf,int radix) __smallc __z88dk_
 #define ltoa(a,b,c) ltoa_callee(a,b,c)
 #endif
 
-__ZPROTO3(long,,strtol,char *,nptr,char **,endptr,int,base)
+__ZPROTO3N(long,,strtol,char *,nptr,char **,endptr,int,base)
 #ifndef __STDC_ABI_ONLY
 extern long __LIB__ strtol_callee(char *nptr,char **endptr,int base) __smallc __z88dk_callee;
 #define strtol(a,b,c) strtol_callee(a,b,c)
 #endif
 
-__ZPROTO3(uint32_t,,strtoul,char *,nptr,char **,endptr,int,base)
+__ZPROTO3N(uint32_t,,strtoul,char *,nptr,char **,endptr,int,base)
 #ifndef __STDC_ABI_ONLY
 extern uint32_t __LIB__ strtoul_callee(char *nptr,char **endptr,int base) __smallc __z88dk_callee;
 #define strtoul(a,b,c) strtoul_callee(a,b,c)
@@ -156,6 +168,13 @@ extern void __LIB__  exit_fastcall(int status) __z88dk_fastcall;
 extern int  __LIB__  atexit_fastcall(void (*func)(void)) __z88dk_fastcall;
 #define exit(x) exit_fastcall(x)
 #define atexit(x) atexit_fastcall(x)
+#elif defined(__clang__)
+/* clang: __z88dk_fastcall maps to z80_fastcall (single arg in HL).
+   exit_fastcall expects HL=status; atexit_fastcall expects HL=func ptr. */
+extern void __LIB__  exit_fastcall(int status) __z88dk_fastcall;
+extern int  __LIB__  atexit_fastcall(void (*func)(void)) __z88dk_fastcall;
+#define exit(x) exit_fastcall(x)
+#define atexit(x) atexit_fastcall(x)
 #endif
 
 // int system(char *s);                     /* might be implemented in target's library but doubtful */
@@ -210,6 +229,40 @@ extern void __LIB__  qsort_sdcc_callee(void *base, unsigned int nel, unsigned in
 #define qsort                  qsort_sccz80
 #define qsort_sccz80(a,b,c,d)  qsort_sccz80_callee(a,b,c,d)
 
+#endif
+
+#ifdef __clang__
+/* clang/llvmz80: qsort_sdcc_callee is a stack-passing (__smallc __z88dk_callee)
+   routine that invokes the comparator with sdcccall(0) semantics --
+   [SP+2]=a, [SP+4]=b, result read from HL (see qsort_sdcc_callee.asm).
+   Two SOURCE-LEVEL annotations make a clang program match it with NO runtime
+   bridge or trampoline (fully reentrant):
+
+     (1) The inline call-order swapper below reverses the four arguments so
+         clang's right-to-left push lands them exactly as qsort_sdcc_callee
+         expects: [SP+2]=compar, [SP+4]=width, [SP+6]=nel, [SP+8]=base.
+         (This is the __ZPROTO4 mechanism, applied by hand to keep the direct
+          call to qsort_sdcc_callee.)
+
+     (2) The user comparator MUST be declared __smallc (== sdcccall(0) for
+         clang) so clang compiles it to read a/b from the stack and return the
+         int result in HL -- precisely qsort_sdcc's callback protocol.  A
+         default (unannotated) comparator instead takes a in HL, b in DE and
+         returns in DE, which qsort_sdcc cannot invoke -> crash.
+         __smallc is a no-op for sccz80/sdcc, so an annotated comparator stays
+         source-portable across all three compilers.
+
+   Example:
+     __smallc int cmp(const void *a, const void *b)
+         { return *(const int *)a - *(const int *)b; }
+     qsort(arr, n, sizeof(int), cmp);        // just works, no bridge */
+__attribute__((always_inline))
+static inline void __qsort_llvmz80(void *base, unsigned int nel,
+                                   unsigned int width, void *compar) {
+    qsort_sdcc_callee(compar, width, nel, base);   /* reversed: see (1) above */
+}
+#undef qsort
+#define qsort(a,b,c,d) __qsort_llvmz80(a,b,c,d)
 #endif
 
 #ifdef __ZX81__
@@ -292,10 +345,23 @@ extern int  __LIB__  abs(int n);
 #ifndef __STDC_ABI_ONLY
 extern int  __LIB__  abs_fastcall(int n) __z88dk_fastcall;
 #define abs(x) abs_fastcall(x)
+#elif defined(__LLVMZ80)
+/* ravn/llvm-z80: __STDC_ABI_ONLY disables the fastcall routing above, but the
+ * classic clib's plain _abs is __smallc (stack ABI) while clang passes the int
+ * in HL -> mismatch (abs(-42) returned garbage).  abs has no reversed-arg form
+ * to bridge, so route it to abs_fastcall (z80_fastcall = HL in/out, already in
+ * the lib) to match llvmz80's register ABI. */
+extern int  __LIB__  abs_fastcall(int n) __z88dk_fastcall;
+#define abs(x) abs_fastcall(x)
 #endif
 
 extern long __LIB__  labs(long n);
 #ifndef __STDC_ABI_ONLY
+extern long  __LIB__  labs_fastcall(long n) __z88dk_fastcall;
+#define labs(x) labs_fastcall(x)
+#elif defined(__LLVMZ80)
+/* ravn/llvm-z80: route labs to labs_fastcall for the register ABI (z80_fastcall
+ * 32-bit = DE:HL in/out, matching asm_labs).  See abs above. */
 extern long  __LIB__  labs_fastcall(long n) __z88dk_fastcall;
 #define labs(x) labs_fastcall(x)
 #endif

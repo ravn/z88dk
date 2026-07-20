@@ -53,6 +53,17 @@ include(__link__.m4)
 #define __smallc
 #define __z88dk_callee
 #define __z88dk_fastcall
+// SDCC parses __preserves_regs as a real function attribute; clang has no
+// such attribute, so without a macro it is left as a literal token
+// followed by an argument list after preprocessing, which clang's parser
+// then sees as garbage after the function declarator (a string dot h
+// declaration ends up as "extern char *foo(...) (d,e);", which fails as
+// "expected function body after function declarator").  Defining it as a
+// no-op function-like macro (matching sys slash compiler dot h's existing
+// clang-safe definition) strips it before clang ever sees it.  (Written
+// with dots/slashes spelled out to avoid m4 misinterpreting path-like
+// tokens in this generated-header comment.)
+#define __preserves_regs(x...)
 #endif
 
 #else

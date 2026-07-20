@@ -196,6 +196,8 @@ static void            configure_maths_library(char **libstring);
 
 static void            apply_copt_rules(int filenumber, int num, char **rules, char *ext1, char *ext2, char *ext);
 static void            zsdcc_asm_filter_comments(int filenumber, char *ext);
+static void            llvmz80_postprocess(int filenumber, char *inext, char *outext);
+static void            ez80clang_fix_db_strings(int filenumber, char *ext);
 static void            zsdcc_asm_filter_sections(int filenumber, char* ext);
 static void            zsdcc_embed_adb(int filenumber);
 static void            remove_temporary_files(void);
@@ -316,6 +318,7 @@ static enum iostyle    compiler_style = outimplied;
 #define CC_EZ80CLANG 2
 #define CC_80CC      3
 #define CC_XCC       4
+#define CC_LLVMZ80   5
 
 static char           *c_compiler_type = "sccz80";
 static int             compiler_type = CC_SCCZ80;
@@ -342,6 +345,14 @@ static char  *c_options = NULL;
 static char  *c_z80asm_exe = "z88dk-z80asm";
 
 static char  *c_ez80clang_exe = "ez80-clang";
+/* -compiler=llvmz80 : ravn/llvm-z80 GlobalISel clang.
+ * Default binary name "llvmz80-clang" is looked up on PATH; override with
+ * LLVMZ80EXE in the z88dk config file or the LLVMZ80EXE environment variable
+ * (env wins -- see the -compiler=llvmz80 branch).
+ * Install llvm-z80 and create a "llvmz80-clang" symlink (or rename) in a
+ * PATH directory, e.g.:
+ *   ln -s /opt/llvm-z80/bin/clang /usr/local/bin/llvmz80-clang */
+static char  *c_llvmz80_exe = "llvmz80-clang";
 static char  *c_sdcc_exe = "z88dk-zsdcc";
 static char  *c_sccz80_exe = "z88dk-sccz80";
 static char  *c_80cc_exe = "z88dk-80cc";
@@ -367,6 +378,19 @@ static char  *c_coptrules_sccz80 = NULL;
 static char  *c_coptrules_target = NULL;
 static char  *coptrules_cpu = NULL;
 static char  *c_ez80clang_opt = NULL;
+static char  *c_llvmz80_opt = NULL;
+static char  *c_llvmz80_postproc = NULL;
+/* -compiler=llvmz80 f64 runtime archive (Berkeley-SoftFloat closure) that
+ * resolves the compiler-rt soft-float libcalls clang emits for `double`
+ * (__adddf3/__floatsidf/...).  It ships ALONGSIDE the llvm-z80 clang binary
+ * (compiler-rt model), NOT inside z88dk, so there is no sensible DESTDIR
+ * default -- leave it empty and let the user point LLVMZ80RTLIB at the
+ * installed lib (full path, WITHOUT the .lib extension; env wins over the
+ * config file, like LLVMZ80EXE).  When set, it is appended to the link line
+ * as -l<path>; because it is a .lib ARCHIVE the linker strips every
+ * unreferenced module, so an integer-only program that never touches a double
+ * pays exactly zero bytes for it. */
+static char  *c_llvmz80_rtlib = NULL;
 static char  *c_80cc_opt = NULL;
 static char  *c_xcc_opt = NULL;
 static char  *c_sdccopt1 = NULL;
@@ -428,6 +452,7 @@ static arg_t  config[] = {
     { "SCCZ80EXE", 0, SetStringConfig, &c_sccz80_exe, NULL, "Name of sccz80 binary" },
     { "ZSDCCEXE", 0, SetStringConfig, &c_sdcc_exe, NULL, "Name of the sdcc binary" },
     { "EZ80CLANGEXE", 0, SetStringConfig, &c_ez80clang_exe, NULL, "Name of the ez80-clang binary" },
+    { "LLVMZ80EXE", 0, SetStringConfig, &c_llvmz80_exe, NULL, "Path to the ravn/llvm-z80 clang binary" },
 
     { "APPMAKEEXE", 0, SetStringConfig, &c_appmake_exe, NULL, "" },
     { "APPMAKER", AF_DEPRECATED, SetStringConfig, &c_appmake_exe, NULL, "Name of the applink binary (use APPMAKEEXE)" },
@@ -444,6 +469,9 @@ static arg_t  config[] = {
     { "COPTRULESINLINE", 0, SetStringConfig, &c_coptrules_sccz80, NULL, "Optimisation file for inlining sccz80 ops", "\"DESTDIR/lib/z80rules.8\"" },
     { "COPTRULESTARGET", 0, SetStringConfig, &c_coptrules_target, NULL, "Optimisation file for target specific operations",NULL },
     { "EZ80CLANGRULES", 0, SetStringConfig, &c_ez80clang_opt, NULL, "Rules for ez80 clang", "DESTDIR/lib/clang_rules.1"},
+    { "LLVMZ80RULES", 0, SetStringConfig, &c_llvmz80_opt, NULL, "copt rules for ravn/llvm-z80 clang", "DESTDIR/lib/llvmz80/llvmz80_rules.1"},
+    { "LLVMZ80POSTPROC", 0, SetStringConfig, &c_llvmz80_postproc, NULL, "Post-copt bridge script for ravn/llvm-z80 clang", "DESTDIR/lib/llvmz80/bridge_postproc.sh"},
+    { "LLVMZ80RTLIB", 0, SetStringConfig, &c_llvmz80_rtlib, NULL, "f64 soft-float runtime archive for ravn/llvm-z80 clang (full path, no .lib suffix; ships with the clang binary)", NULL},
     { "80CCRULES", 0, SetStringConfig, &c_80cc_opt, NULL, "Options for 80cc", "DESTDIR/lib/80cc_rules.1"},
     { "XCCRULES", 0, SetStringConfig, &c_xcc_opt, NULL, "Options for xcc", "DESTDIR/lib/xcc_rules.1"},
     { "SDCCOPT1", 0, SetStringConfig, &c_sdccopt1, NULL, "", "\"DESTDIR/lib/sdcc/sdcc_opt.1\"" },
@@ -547,7 +575,7 @@ static option options[] = {
     { 0, "isystem", OPT_FUNCTION|OPT_INCLUDE_OPT,  "Add a system include path for the preprocessor" , &cpparg, AddToArgsQuoted, 0},
 
     { 0, "", OPT_HEADER, "Compiler (all) options:", NULL, NULL, 0 },
-    { 0, "compiler", OPT_STRING,  "Set the compiler type from the command line (sccz80,sdcc,ez80clang,80cc)" , &c_compiler_type, NULL, 0},
+    { 0, "compiler", OPT_STRING,  "Set the compiler type from the command line (sccz80,sdcc,ez80clang,llvmz80,80cc)" , &c_compiler_type, NULL, 0},
     { 0, "c-code-in-asm", OPT_BOOL|OPT_DOUBLE_DASH,  "Add C code to .asm files" , &c_code_in_asm, NULL, 0},
     { 0, "no-nop-comment", OPT_BOOL|OPT_DOUBLE_DASH,  "Disable nop-comment inlined asm in sdcc output" , &c_disable_nop_comment, NULL, 0},
     { 0, "opt-code-speed", OPT_FUNCTION|OPT_DOUBLE_DASH|OPT_DEFAULT_VALUE,  "Optimize for code speed" , NULL, conf_opt_code_speed, (intptr_t)"all"},
@@ -1215,6 +1243,20 @@ int main(int argc, char **argv)
     if (linker_linklib_first)
         BuildOptions_start(&linklibs, linker_linklib_first);
 
+    /* -compiler=llvmz80: auto-link the f64 soft-float runtime archive so that
+     * `double` programs resolve __adddf3/__floatsidf/... with no explicit -l.
+     * It is a .lib archive, so the linker discards every unreferenced module
+     * -> an integer-only program pays zero bytes.  Only meaningful when
+     * actually linking a program (not -c / --make-lib) and when the user has
+     * pointed LLVMZ80RTLIB at the installed lib (empty by default). */
+    if (compiler_type == CC_LLVMZ80 && !compileonly && !makelib &&
+        c_llvmz80_rtlib && *c_llvmz80_rtlib) {
+        char *rtarg;
+        zcc_asprintf(&rtarg, "-l\"%s\"", c_llvmz80_rtlib);
+        BuildOptions(&linklibs, rtarg);
+        free(rtarg);
+    }
+
     if (printmacros)
     {
         BuildOptions(&cpparg, "-d");
@@ -1371,7 +1413,7 @@ int main(int argc, char **argv)
         case CXXFILE:
             if (m4only) continue;
             /* past clang+llvm related pre-processing */
-            if (compiler_type == CC_SDCC || compiler_type == CC_EZ80CLANG) {
+            if (compiler_type == CC_SDCC || compiler_type == CC_EZ80CLANG || compiler_type == CC_LLVMZ80) {
                 char zpragma_args[1024];
                 snprintf(zpragma_args, sizeof(zpragma_args),"-zcc-opt=\"%s\"", zcc_opt_def);
                 if (process(ft == CXXFILE ? ".cpp" : ".c", ".i2", c_cpp_exe, cpparg, c_stylecpp, i, YES, YES))
@@ -1476,9 +1518,18 @@ int main(int argc, char **argv)
                 char  *rules[MAX_COPT_RULE_FILES];
                 int    num_rules = 0;
 
+                /* ravn/z88dk#19: repair ez80-clang's unescaped `db "..."`
+                 * string directives before copt (and z80asm) ever see them. */
+                ez80clang_fix_db_strings(i, ".op1");
+
                 rules[num_rules++] = c_ez80clang_opt;
 
-                apply_copt_rules(i, num_rules, rules, ".opt", ".op1", ".asm");
+                apply_copt_rules(i, num_rules, rules, ".op1", ".op2", ".asm");
+            } else if ( compiler_type == CC_LLVMZ80) {
+                /* The clang GNU-as dialect needs copt PLUS two filters copt
+                 * cannot express (dot-labels, extern header); the whole chain
+                 * lives in bridge_postproc.sh.  See llvmz80_postprocess(). */
+                llvmz80_postprocess(i, ".opt", ".asm");
             } else if (compiler_type == CC_XCC) {
                 char  *rules[MAX_COPT_RULE_FILES];
                 int    num_rules = 0;
@@ -1899,6 +1950,160 @@ static void zsdcc_embed_adb(int filenumber)
 
 
 /* filter comments out of asz80 asm file see issue #801 on github */
+/* -compiler=llvmz80 post-compile bridge.  The compile step leaves raw
+ * ravn/llvm-z80 clang assembly (GNU-as dialect) in <inext>; run it through
+ * bridge_postproc.sh (z88dk-copt + fixlabels.pl + extern-header awk) to
+ * produce z80asm in <outext>.  Done as a direct system() (not process())
+ * because the helpers -- copt, perl, awk -- are not all in the z88dk bin
+ * dir, so the bin_dir-prefixing process() styles do not fit. */
+static void llvmz80_postprocess(int filenumber, char *inext, char *outext)
+{
+    char *inname;
+    char *outname;
+    char  cmd[FILENAME_MAX * 4];
+    char *cpuarg;
+
+    inname  = filelist[filenumber];
+    outname = changesuffix(temporary_filenames[filenumber], outext);
+
+    if (!hassuffix(inname, inext)) {
+        free(outname);
+        return;
+    }
+
+    cpuarg = select_cpu(CPU_MAP_TOOL_COPT);
+
+    snprintf(cmd, sizeof(cmd),
+             "sh \"%s\" \"%s%s\" \"%s\" \"%s\" < \"%s\" > \"%s\"",
+             c_llvmz80_postproc,
+             c_binary_dir, c_copt_exe,
+             cpuarg ? cpuarg : "",
+             c_llvmz80_opt,
+             inname, outname);
+
+    if (verbose) {
+        fprintf(stderr, "%s\n", cmd);
+        fflush(stderr);
+    }
+
+    if (system(cmd) != 0) {
+        fprintf(stderr, "Error: llvm-z80 bridge post-processing failed\n");
+        exit(1);
+    }
+
+    free(filelist[filenumber]);
+    filelist[filenumber] = outname;
+}
+
+/* -compiler=ez80clang workaround for a CE-Programming/llvm-project asm-printer
+ * bug (ravn/z88dk#19): ez80-clang's `db "..."` string directives for byte
+ * arrays/string literals emit the RAW bytes of the string between the quotes,
+ * with no escaping at all -- e.g. `char msg[] = "hi\n"` prints literally as
+ *   db      "hi
+ *  "
+ * (an actual 0x0A byte sitting inside the quoted token).  z80asm's assembler
+ * is line-oriented, so the embedded raw newline ends the "line" before the
+ * closing quote is reached, and the whole directive fails to parse ("missing
+ * quote").  Any other raw control byte (tab, NUL, ...) would be similarly
+ * malformed even where it doesn't visibly break the line.
+ *
+ * This is confirmed (2026-07, root-caused via a libc-free repro run directly
+ * through `ez80-clang -Xclang -triple -Xclang z80 -S`, bypassing z88dk's
+ * bridge entirely) to originate in ez80-clang's own output -- z88dk's
+ * clang_rules.1 has no string/db-related copt rules at all, so it neither
+ * causes nor could plausibly fix this on its own.  ez80-clang is a prebuilt
+ * third-party (CE-Programming) binary we do not build from source, so the
+ * fix has to live here: re-scan every `db "..."` directive byte-for-byte and
+ * re-emit it as an alternating sequence of quoted printable runs and numeric
+ * byte values, e.g. `db "hi",10` instead of the broken raw form above. This
+ * assumes (as ez80-clang's own output does) that the string content itself
+ * never contains a literal '"' byte -- if it did, ez80-clang's own emission
+ * would already be ambiguous, not just ours.
+ */
+static void ez80clang_fix_db_strings(int filenumber, char *ext)
+{
+    FILE   *fin;
+    FILE   *fout;
+    char   *outname;
+    char   *buf;
+    long    size;
+    long    pos;
+
+    outname = changesuffix(temporary_filenames[filenumber], ext);
+
+    if ((fin = fopen(filelist[filenumber], "rb")) == NULL) {
+        fprintf(stderr, "Error: Cannot read %s\n", filelist[filenumber]);
+        exit(1);
+    }
+    fseek(fin, 0, SEEK_END);
+    size = ftell(fin);
+    fseek(fin, 0, SEEK_SET);
+    buf = malloc(size + 1);
+    if (buf == NULL || (long)fread(buf, 1, size, fin) != size) {
+        fprintf(stderr, "Error: Cannot read %s\n", filelist[filenumber]);
+        exit(1);
+    }
+    buf[size] = '\0';
+    fclose(fin);
+
+    if ((fout = fopen(outname, "wb")) == NULL) {
+        fprintf(stderr, "Error: Cannot write %s\n", outname);
+        exit(1);
+    }
+
+    pos = 0;
+    while (pos < size) {
+        /* look for the exact opening token ez80-clang emits: "\tdb\t\"" */
+        if (pos + 4 <= size && buf[pos] == '\t' && buf[pos+1] == 'd' &&
+            buf[pos+2] == 'b' && buf[pos+3] == '\t' && pos + 4 < size && buf[pos+4] == '"') {
+            long content_start = pos + 5;
+            long q = content_start;
+
+            /* find the next raw '"' byte -- see the assumption noted above */
+            while (q < size && buf[q] != '"') q++;
+
+            if (q < size) {
+                long   k;
+                int    run_open = 0;
+                int    emitted_anything = 0;
+
+                fputs("\tdb\t", fout);
+                for (k = content_start; k < q; k++) {
+                    unsigned char c = (unsigned char)buf[k];
+                    if (c >= 0x20 && c <= 0x7E && c != '"') {
+                        if (!run_open) {
+                            if (emitted_anything) fputc(',', fout);
+                            fputc('"', fout);
+                            run_open = 1;
+                        }
+                        fputc(c, fout);
+                    } else {
+                        if (run_open) { fputc('"', fout); run_open = 0; }
+                        if (emitted_anything) fputc(',', fout);
+                        fprintf(fout, "%u", c);
+                    }
+                    emitted_anything = 1;
+                }
+                if (run_open) fputc('"', fout);
+                if (!emitted_anything) fputs("\"\"", fout); /* empty string literal */
+
+                pos = q + 1;
+                continue;
+            }
+            /* no closing quote found at all (shouldn't happen) -- fall through
+             * and copy this byte through unmodified so we don't hang/truncate */
+        }
+        fputc(buf[pos], fout);
+        pos++;
+    }
+
+    free(buf);
+    fclose(fout);
+
+    free(filelist[filenumber]);
+    filelist[filenumber] = outname;
+}
+
 void zsdcc_asm_filter_comments(int filenumber, char *ext)
 {
     FILE *fin;
@@ -3256,6 +3461,73 @@ static void configure_compiler(void)
         c_compiler = c_ez80clang_exe;
         c_cpp_exe = c_ez80clang_exe;
         compiler_style = filter_outspecified_flag;
+        c_stylecpp = filter_out;
+    } else if (strcmp(c_compiler_type,"llvmz80") == 0 ) {
+        /* ravn/llvm-z80 GlobalISel clang, linked against z88dk's CP/M clib
+         * via the copt bridge (bridge_postproc.sh runs in the OPTFILE stage;
+         * see llvmz80_postprocess()).  We drive the clang *driver* (not -cc1)
+         * with --target=z80, so both the preprocess and compile steps use the
+         * filter_out iostyle: it omits the z88dk bin-dir prefix (our clang is
+         * an absolute/PATH binary, not a z88dk tool) and pipes via stdio. */
+        preprocarg = " -E -D__CLANG -D__LLVMZ80 --target=z80 -std=gnu11";
+        BuildOptions(&cpparg, preprocarg);
+
+        /* zcc feeds this step a .i file (preprocessed), which the clang
+         * driver already recognises as C -- no -x needed.  -o - writes asm to
+         * stdout for the `>` redirect of the filter_out style.  gnu11: z88dk's
+         * clib headers use `inline` and clang overloadable/enable_if attrs.
+         *
+         * Optimisation level: --opt-code-size wins with clang -Oz; otherwise
+         * we pass the zcc -O<n> level straight through (peepholeopt holds it),
+         * so `zcc -O2` -> `clang -O2` and `zcc -O3` -> `clang -O3` instead of
+         * the old always-`-O3`.  Clamp to clang's [0,3]; no -O -> peepholeopt 0
+         * -> -O0, matching the compiler-driver convention. */
+        {
+            char optflag[8];
+            if (opt_code_size) {
+                strcpy(optflag, "-Oz");
+            } else {
+                int lvl = peepholeopt;
+                if (lvl < 0) lvl = 0;
+                if (lvl > 3) lvl = 3;
+                snprintf(optflag, sizeof(optflag), "-O%d", lvl);
+            }
+            snprintf(buf, sizeof(buf),
+                     "--target=z80 -S -ffreestanding -std=gnu11 -o - %s",
+                     optflag);
+        }
+        add_option_to_compiler(buf);
+
+        if (clangarg) {
+            add_option_to_compiler(clangarg);
+        }
+
+        /* Two llvm-z80 builds coexist on the macbook: the Release, no-assert
+         * build-macos (the committed default in c_llvmz80_exe, used for
+         * benchmarks) and the RelWithDebInfo+assertions build-macos-asserts
+         * (for -debug-only / IR verifier coverage).  Honour a LLVMZ80EXE
+         * environment override so either can be selected per-invocation without
+         * editing the config file, matching the promise in c_llvmz80_exe's
+         * comment.  Config-file LLVMZ80EXE (if any) still wins over this only
+         * when the env var is unset. */
+        {
+            char *env_llvmz80 = getenv("LLVMZ80EXE");
+            if (env_llvmz80 && *env_llvmz80)
+                c_llvmz80_exe = env_llvmz80;
+        }
+        /* Same env-over-config override for the f64 soft-float runtime archive
+         * (see c_llvmz80_rtlib) so it can be pointed at the installed lib
+         * per-invocation.  Appended to the link line further below. */
+        {
+            char *env_rtlib = getenv("LLVMZ80RTLIB");
+            if (env_rtlib && *env_rtlib)
+                c_llvmz80_rtlib = env_rtlib;
+        }
+
+        compiler_type = CC_LLVMZ80;
+        c_compiler = c_llvmz80_exe;
+        c_cpp_exe = c_llvmz80_exe;
+        compiler_style = filter_out;
         c_stylecpp = filter_out;
     } else {
         printf("Unknown compiler type: %s\n",c_compiler_type);

@@ -74,7 +74,12 @@
 ../../math/float/math32/z80/f32_z80_mulu_32h_24x24
 ../../math/float/math32/z80/f32_z80_mulu_32h_32x32
 ../../math/float/math32/z80/f32_z80_sqr_32h_24x24
+../../l/util/5-z80/longlong/l_lsr_dehldehl
+../../l/util/5-z80/longlong/small/l_small_lsr_dehldehl
+../../l/util/5-z80/longlong/fast/l_fast_lsr_dehldehl
 ../../arch/z80/z80/asm_z80_delay_ms
 ../../arch/z80/z80/asm_z80_delay_tstate
 
 @../../l/clang.lst
+
+@../../l/llvmz80.lst

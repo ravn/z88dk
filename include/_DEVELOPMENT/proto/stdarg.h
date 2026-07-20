@@ -3,7 +3,21 @@ include(__link__.m4)
 #ifndef __STDARG_H__
 #define __STDARG_H__
 
-#if defined(__CLANG)
+#if defined(__LLVMZ80)
+
+/* llvm-z80 (clang): the classic &last+sizeof(last) trick locates varargs via
+ * the address of the last named parameter. That assumes named params sit
+ * contiguously in front of the varargs (true for sccz80/sdcc). clang-z80
+ * copies each param into a local spill slot, so &last is a local (e.g. IX-2),
+ * not the incoming arg area (IX+6) -- every va_arg then reads garbage.
+ * Defer to the correct, ABI-aware builtins instead. See ravn/z88dk#29. */
+typedef __builtin_va_list va_list;
+#define va_start(ap, last)  __builtin_va_start(ap, last)
+#define va_arg(ap, type)    __builtin_va_arg(ap, type)
+#define va_copy(dest, src)  __builtin_va_copy(dest, src)
+#define va_end(ap)          __builtin_va_end(ap)
+
+#elif defined(__CLANG)
 
 typedef unsigned char * va_list;
 
