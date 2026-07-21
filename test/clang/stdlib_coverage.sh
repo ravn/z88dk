@@ -87,6 +87,10 @@ probe stdlib.h calloc   "void *p=calloc(4,4); (void)p;"
 probe stdlib.h realloc  "void *p=malloc(4); p=realloc(p,8); (void)p;"
 probe stdlib.h free     "free(malloc(4));"
 probe stdlib.h qsort    "int a[2]={2,1}; qsort(a,2,2,0);"
+# CLASSIC_DESIGN: standard bsearch(key,base,nmemb,size,compar) needs midpoint*size
+# (a 16-bit multiply per iteration).  Classic clib deliberately avoids this cost:
+# l_bsearch(key,base,n,cmp) only handles 2-byte-element arrays (bit-shift instead
+# of multiply, Lbsearch.asm 2005).  Newlib has the full 5-arg version.
 probe stdlib.h bsearch  "int a[2]={1,2},k=1; (void)bsearch(&k,a,2,2,0);"
 probe stdlib.h exit     "/* exit tested indirectly — not called */"
 
@@ -118,6 +122,8 @@ probe stdio.h ferror    "FILE *f=fopen(\"x\",\"r\"); if(f){(void)ferror(f);fclos
 probe stdio.h fflush    "fflush(stdout);"
 probe stdio.h remove    "(void)remove(\"x\");"
 probe stdio.h rename    "(void)rename(\"a\",\"b\");"
+# CLASSIC_DESIGN: CP/M has no temp-file primitives; tmpfile() is deliberately
+# absent from +cpm stdio.h across all compilers (not a missing bridge).
 probe stdio.h tmpfile   "(void)tmpfile();"
 
 echo ""
