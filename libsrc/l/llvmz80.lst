@@ -3,3 +3,4 @@ ${NEWLIB_ROOT}l/llvmz80/__fflush.asm
 ${NEWLIB_ROOT}l/llvmz80/__divhi3.asm
 ${NEWLIB_ROOT}l/llvmz80/__divsi3.asm
 ${NEWLIB_ROOT}l/llvmz80/__udivqi3.asm
+${NEWLIB_ROOT}l/llvmz80/__itoa.asm
