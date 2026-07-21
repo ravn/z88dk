@@ -223,8 +223,11 @@ extern char __LIB__  *strerror(char *s);
 #ifndef __STDC_ABI_ONLY
 extern char __LIB__  *strerror_fastcall(char *s)  __z88dk_fastcall;
 #define strerror(x) strerror_fastcall(x)
-#elif defined(__LLVMZ80)  /* llvmz80 register ABI: see strlen */
-extern char __LIB__  *strerror_fastcall(char *s)  __z88dk_fastcall;
+#elif defined(__LLVMZ80)
+/* llvmz80: strerror takes int errnum per POSIX; fastcall reads arg from HL
+ * (where llvmz80 places any single register arg regardless of declared type).
+ * Declare with int to avoid -Wint-conversion when called as strerror(errno). */
+extern char __LIB__  *strerror_fastcall(int errnum)  __z88dk_fastcall;
 #define strerror(x) strerror_fastcall(x)
 #endif
 
