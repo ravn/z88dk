@@ -25,7 +25,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 fail() { echo "FAIL: $1"; exit 1; }
 
-if ! zcc +cpm -compiler=llvmz80 -O2 -D__LLVMZ80_IEEE_PRINTF \
+if ! zcc +cpm -compiler=llvmz80 ${ZCC_CLIB:-} -O2 -D__LLVMZ80_IEEE_PRINTF \
         -create-app -o "$WORK/rt" "$SRC" >"$WORK/build.log" 2>&1; then
     echo "--- build log ---"; cat "$WORK/build.log"
     fail "zcc build failed"

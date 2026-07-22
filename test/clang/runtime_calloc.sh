@@ -28,7 +28,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 fail() { echo "FAIL: $1"; exit 1; }
 
-if ! zcc +cpm -compiler=llvmz80 -O2 -create-app \
+if ! zcc +cpm -compiler=llvmz80 ${ZCC_CLIB:-} -O2 -create-app \
 	-pragma-define:CLIB_MALLOC_HEAP_SIZE=8000 \
 	-o "$WORK/rt" "$SRC" -m >"$WORK/build.log" 2>&1; then
 	echo "--- build log ---"; cat "$WORK/build.log"

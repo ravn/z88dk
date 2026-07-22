@@ -16,7 +16,7 @@ command -v zcc >/dev/null 2>&1 || { echo "SKIP: zcc not on PATH"; exit 0; }
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
-if zcc +cpm -compiler=llvmz80 -O2 -create-app -o "$WORK/rt" "$SRC" >"$WORK/build.log" 2>&1; then
+if zcc +cpm -compiler=llvmz80 ${ZCC_CLIB:-} -O2 -create-app -o "$WORK/rt" "$SRC" >"$WORK/build.log" 2>&1; then
     echo "XPASS: tmpfile now builds on +cpm -- gap closed, retire xfail_tmpfile"
 else
     reason=$(grep -iE "undeclared|undefined|tmpfile" "$WORK/build.log" | head -1 | sed 's/^[[:space:]]*//')

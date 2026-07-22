@@ -60,11 +60,11 @@ run_at() {
 	B="$WORK/rt_$(echo "$OPT" | tr -d ' -')"
 
 	# Emit asm for the call-site (emission) assertions.
-	zcc +cpm -compiler=llvmz80 $OPT -S -o "$B.s" "$SRC" >"$B.slog" 2>&1 \
+	zcc +cpm -compiler=llvmz80 ${ZCC_CLIB:-} $OPT -S -o "$B.s" "$SRC" >"$B.slog" 2>&1 \
 		|| { echo "--- asm log ($OPT) ---"; cat "$B.slog"; fail "$OPT: zcc -S failed"; }
 
 	# Link + build the runnable .com (also proves every helper resolves).
-	if ! zcc +cpm -compiler=llvmz80 $OPT -create-app -o "$B" "$SRC" -m >"$B.log" 2>&1; then
+	if ! zcc +cpm -compiler=llvmz80 ${ZCC_CLIB:-} $OPT -create-app -o "$B" "$SRC" -m >"$B.log" 2>&1; then
 		echo "--- build log ($OPT) ---"; cat "$B.log"
 		if grep -qi 'undefined symbol' "$B.log"; then
 			fail "$OPT: link failed with undefined runtime helper (bridge symbol missing from z80_crt0.lib?)"

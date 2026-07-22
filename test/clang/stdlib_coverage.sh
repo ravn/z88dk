@@ -30,7 +30,7 @@ probe() {
 #include <$hdr>
 int main(void) { $call; return 0; }
 CSRC
-    if zcc +cpm -compiler=llvmz80 -O2 -create-app \
+    if zcc +cpm -compiler=llvmz80 ${ZCC_CLIB:-} -O2 -create-app \
         -pragma-define:CLIB_MALLOC_HEAP_SIZE=4000 \
         -o "$WORK/probe_$fn" "$src" >"$WORK/probe_$fn.log" 2>&1; then
         printf 'LINKS      %-12s %s\n' "$hdr" "$fn"
