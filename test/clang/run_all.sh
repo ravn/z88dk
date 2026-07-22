@@ -106,6 +106,8 @@ newlib_skip_reason() {
         nontrivial_demo.sh)     echo "newlib-path build fails (sdcc-gen ICE); compiler selection under -clib=sdcc_iy (plan Phase B)" ;;
         runtime_stdmisc.sh)     echo "runtime output mismatch on newlib (plan Phase B)" ;;
         runtime_strerror.sh)    echo "newlib strerror differs from the classic bridge (plan Phase B)" ;;
+        runtime_file.sh)        echo "FILE* does not link on newlib (undefined asm_target_open_p1/p2) (plan Phase B)" ;;
+        runtime_attr.sh)        echo "__attribute__((...)) rejected on the newlib -D__SDCC preprocessing path (plan Phase C)" ;;
         *) return 1 ;;
     esac
 }
