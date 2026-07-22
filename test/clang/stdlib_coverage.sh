@@ -103,8 +103,12 @@ probe stdio.h fprintf   "fprintf(stdout,\"%d\",1);"
 probe stdio.h scanf     "/* scan from stdin -- link only */ int x; (void)scanf(\"%d\",&x);"
 probe stdio.h sscanf    "int x; sscanf(\"1\",\"%d\",&x);"
 probe stdio.h fscanf    "int x; fscanf(stdin,\"%d\",&x);"
-probe stdio.h vprintf   "#include <stdarg.h>"  # skip -- needs varargs shim
-probe stdio.h vsnprintf "char b[8]; va_list ap; vsnprintf(b,8,\"%d\",ap);"
+# vprintf is a MACRO in stdio.h (#define vprintf(c,a) vfprintf(stdout,c,a)),
+# not a symbol — probe its target vfprintf, which IS the bridged symbol.
+# vsnprintf is a real symbol.  Survey checks LINKING only; take the address to
+# avoid needing a va_list.  Real behavior: runtime_vaarg.sh.
+probe stdio.h vfprintf  "extern int vfprintf(); (void)&vfprintf;"  # vprintf macro -> this
+probe stdio.h vsnprintf "extern int vsnprintf(); (void)&vsnprintf;"
 probe stdio.h puts      "puts(\"hi\");"
 probe stdio.h putchar   "putchar('A');"
 probe stdio.h getchar   "(void)getchar();"
