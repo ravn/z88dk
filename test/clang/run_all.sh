@@ -72,7 +72,7 @@ echo "  ZCCCFG     : $ZCCCFG"
 echo "  NTVCM      : ${NTVCM:-not found (tests that need it will SKIP)}"
 echo ""
 
-PASS=0; FAIL=0; SKIP=0
+PASS=0; FAIL=0; SKIP=0; XFAIL=0; XPASS=0
 
 for script in "$DIR"/*.sh; do
     name=$(basename "$script")
@@ -83,6 +83,18 @@ for script in "$DIR"/*.sh; do
         PASS:*|PASS\ *)
             echo "PASS  $name"
             PASS=$((PASS + 1))
+            ;;
+        # XFAIL: a known, documented gap that is EXPECTED to fail (e.g. a
+        # deliberately-absent classic-clib function).  Ignored — not a failure.
+        XFAIL:*|XFAIL\ *)
+            echo "xfail $name ($result)"
+            XFAIL=$((XFAIL + 1))
+            ;;
+        # XPASS: an xfail test that UNEXPECTEDLY succeeded — the gap closed;
+        # surface it so the xfail note can be retired.  Counts as a failure.
+        XPASS:*|XPASS\ *)
+            echo "XPASS $name -- $result  (unexpected: gap closed, retire the xfail)"
+            FAIL=$((FAIL + 1))
             ;;
         SKIP:*|SKIP\ *)
             echo "skip  $name ($result)"
@@ -96,5 +108,5 @@ for script in "$DIR"/*.sh; do
 done
 
 echo ""
-echo "Results: $PASS PASS, $FAIL FAIL, $SKIP SKIP"
+echo "Results: $PASS PASS, $FAIL FAIL, $SKIP SKIP, $XFAIL XFAIL"
 [ "$FAIL" -eq 0 ]
