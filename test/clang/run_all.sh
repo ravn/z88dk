@@ -69,18 +69,26 @@ export NTVCM
 # ---- select the C library the suite builds against ----
 # TEST_CLIB picks which z88dk clib every test links.  The same testcases run
 # unchanged against each; each test appends $ZCC_CLIB to its `zcc` line.
-#   classic  (default) -> the classic clib (-clib=default), the supported path
-#   sdcc_iy            -> newlib, sdcc ABI, IY reserved (matches clang; preferred)
-#   sdcc_ix            -> newlib, sdcc ABI, IX/IY free
+#   classic   (default) -> the classic clib (-clib=default), the supported path
+#   newlib_iy           -> newlib via -compiler=llvmz80 (SANCTIONED clang route,
+#                          Phase C): clang -E preprocesses _DEVELOPMENT headers
+#                          with -D__LLVMZ80, no z88dk-ucpp -D__SDCC choke
+#   newlib_ix           -> same, IX/IY free marker (links the same sdcc_ix lib)
+#   sdcc_iy / sdcc_ix   -> UNSUPPORTED override: -clib=sdcc_iy -compiler=llvmz80
+#                          (the sdcc CLIB line forces -compiler=sdcc, so the
+#                          ucpp -D__SDCC pass runs and __smallc/__attribute__
+#                          sources cannot compile).  Kept for A/B only.
 # See tasks/plan-newlib-llvmz80-support-2026-07-22.md.  Tests that are specific
 # to the classic clib self-SKIP when TEST_CLIB is a newlib variant (they read
 # $TEST_CLIB).
 TEST_CLIB=${TEST_CLIB:-classic}
 case "$TEST_CLIB" in
-    classic)  ZCC_CLIB="" ;;
-    sdcc_iy)  ZCC_CLIB="-clib=sdcc_iy" ;;
-    sdcc_ix)  ZCC_CLIB="-clib=sdcc_ix" ;;
-    *) echo "ERROR: unknown TEST_CLIB=$TEST_CLIB (classic|sdcc_iy|sdcc_ix)"; exit 1 ;;
+    classic)    ZCC_CLIB="" ;;
+    newlib_iy)  ZCC_CLIB="-clib=newlib_iy" ;;
+    newlib_ix)  ZCC_CLIB="-clib=newlib_ix" ;;
+    sdcc_iy)    ZCC_CLIB="-clib=sdcc_iy" ;;
+    sdcc_ix)    ZCC_CLIB="-clib=sdcc_ix" ;;
+    *) echo "ERROR: unknown TEST_CLIB=$TEST_CLIB (classic|newlib_iy|newlib_ix|sdcc_iy|sdcc_ix)"; exit 1 ;;
 esac
 export TEST_CLIB ZCC_CLIB
 
@@ -98,18 +106,38 @@ PASS=0; FAIL=0; SKIP=0; XFAIL=0; XPASS=0
 # variant, with a reason, so the newlib run stays green while the gaps stay
 # visible.  Fix phases are in tasks/plan-newlib-llvmz80-support-2026-07-22.md.
 newlib_skip_reason() {
+    # Genuine gaps that remain on the SANCTIONED newlib route (newlib_iy/_ix,
+    # -compiler=llvmz80) after Phase C landed the compiler.h __LLVMZ80 mapping.
     case "$1" in
-        runtime_printf_ieee.sh) echo "classic stdio.h -D__LLVMZ80_IEEE_PRINTF route; newlib %f is separate (plan Phase D)" ;;
-        xfail_bsearch.sh)       echo "newlib ships standard bsearch; the missing-bsearch gap is classic-only" ;;
-        runtime_qsort.sh)       echo "source uses __smallc; newlib _DEVELOPMENT sys/compiler.h llvmz80 branch incomplete (plan Phase C)" ;;
-        runtime_intdiv.sh)      echo "same newlib compiler.h token gap as qsort (plan Phase C)" ;;
-        nontrivial_demo.sh)     echo "newlib-path build fails (sdcc-gen ICE); compiler selection under -clib=sdcc_iy (plan Phase B)" ;;
-        runtime_stdmisc.sh)     echo "runtime output mismatch on newlib (plan Phase B)" ;;
-        runtime_strerror.sh)    echo "newlib strerror differs from the classic bridge (plan Phase B)" ;;
-        runtime_file.sh)        echo "FILE* does not link on newlib (undefined asm_target_open_p1/p2) (plan Phase B)" ;;
-        runtime_attr.sh)        echo "__attribute__((...)) rejected on the newlib -D__SDCC preprocessing path (plan Phase C)" ;;
-        *) return 1 ;;
+        runtime_printf_ieee.sh) echo "classic stdio.h -D__LLVMZ80_IEEE_PRINTF route; newlib %f is separate (plan Phase D)"; return 0 ;;
+        xfail_bsearch.sh)       echo "newlib ships standard bsearch; the missing-bsearch gap is classic-only"; return 0 ;;
+        runtime_file.sh)        echo "FILE* does not link on newlib (undefined asm_target_open_p1/p2)"; return 0 ;;
+        # Integer-helper gap: clang emits gcc-style libcalls (__mulhi3/__divsi3/
+        # __divmodsi4/__modsi3/__umodhi3) for runtime 16/32-bit mul/div/mod;
+        # newlib has no such symbols and the classic libsrc/l/llvmz80 bridge
+        # objects need classic-clib build context (config_private.inc + l_*
+        # cores) that -nostdlib newlib does not provide.  Distinct follow-up.
+        runtime_qsort.sh)       echo "clang __mulhi3/__umodhi3 libcalls (LCG) absent from newlib (integer-helper gap)"; return 0 ;;
+        runtime_intdiv.sh)      echo "clang __divmodsi4/__udivmodsi4 libcalls absent from newlib (integer-helper gap)"; return 0 ;;
+        runtime_long.sh)        echo "clang __divsi3/__modsi3 libcalls absent from newlib (integer-helper gap)"; return 0 ;;
     esac
+    # The UNSUPPORTED sdcc_iy/sdcc_ix override forces -compiler=sdcc, so a
+    # z88dk-ucpp -D__SDCC pass runs first and chokes on source-level __smallc /
+    # __attribute__((...)); those sources cannot even compile there.  Skip the
+    # extra source-feature tests on that route only (they PASS on newlib_iy).
+    case "$TEST_CLIB" in
+        sdcc_iy|sdcc_ix)
+            case "$1" in
+                runtime_qsort.sh)   echo "sdcc_iy override: __smallc rejected by ucpp -D__SDCC pass"; return 0 ;;
+                runtime_intdiv.sh)  echo "sdcc_iy override: __attribute__ rejected by ucpp -D__SDCC pass"; return 0 ;;
+                runtime_attr.sh)    echo "sdcc_iy override: __attribute__ rejected by ucpp -D__SDCC pass"; return 0 ;;
+                nontrivial_demo.sh) echo "sdcc_iy override: compiler-selection ICE on the ucpp path"; return 0 ;;
+                runtime_stdmisc.sh) echo "sdcc_iy override: runtime output mismatch on the ucpp path"; return 0 ;;
+                runtime_strerror.sh)echo "sdcc_iy override: strerror differs on the ucpp path"; return 0 ;;
+                runtime_long.sh)    return 1 ;;  # passes on sdcc_iy (ucpp __SDCC routes long math)
+            esac ;;
+    esac
+    return 1
 }
 
 for script in "$DIR"/*.sh; do

@@ -23,9 +23,9 @@ if ! zcc +cpm -compiler=llvmz80 ${ZCC_CLIB:-} -O2 -create-app -o "$WORK/rt" "$SR
     echo "--- build log ---"; cat "$WORK/build.log"
     fail "zcc build failed (likely undefined __rodata_error_strings_head)"
 fi
-[ -f "$WORK/rt" ] || fail "no output produced"
+[ -f "$WORK/rt.com" ] || fail "no .com produced"
 
-OUT=$("$NTVCM" "$WORK/rt" 2>/dev/null | tr -d '\r')
+OUT=$("$NTVCM" "$WORK/rt.com" 2>/dev/null | tr -d '\r')
 
 echo "$OUT" | grep -qF "PASS strerror links and returns non-empty strings" \
     || fail "strerror failed. got: [$OUT]"
