@@ -9,7 +9,10 @@ production firmware path (rcbios/autoload/CP-NET/cpnos don't use qsort/strerror)
 Nothing here blocks the signed-mod fix, which is done (see
 `BUG_newlib_signed_mod.md`).
 
-## 1. runtime_qsort — comparator ABI mismatch with upstream's redesigned qsort
+**Tracking issues:** qsort → ravn/z88dk **#33**; strerror → ravn/z88dk **#32**
+(pre-existing; commented with the post-merge manifestation).
+
+## 1. runtime_qsort — comparator ABI mismatch with upstream's redesigned qsort  (#33)
 
 Upstream replaced the classic qsort machinery (`qsort_sccz80`/`qsort_sdcc`/
 `qsort_sdcc_callee`, all deleted) with a single sort core plus **per-compiler
@@ -33,7 +36,7 @@ marshalling and add the right `stdlib.h` routing for `__LLVMZ80` (clang emits
 if the marshalling differs. Then restore/update the `__smallc`-comparator
 contract in `runtime_qsort.c` to whatever the new design needs.
 
-## 2. runtime_strerror — `__rodata_error_strings_head` not pulled
+## 2. runtime_strerror — `__rodata_error_strings_head` not pulled  (#32)
 
 Upstream's `libsrc/string/z80/asm_strerror.asm` references
 `__rodata_error_strings_head`. ravn's `libsrc/l/llvmz80/__strerror_table.asm`
