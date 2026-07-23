@@ -1,8 +1,18 @@
 # BUG: z88dk newlib returns |a % b| for 8/16-bit signed modulo (stale prebuilt library)
 
-**Status:** candidate for upstream z88dk filing. Found 2026-07-23 while adding
-clang/llvmz80 integer-helper support for the newlib CP/M target; NOT a
-clang-specific issue — reproduces with stock z88dk sccz80 and sdcc.
+**Status: RESOLVED locally 2026-07-24 by rebuilding the newlib libraries** after
+merging upstream/master. Root cause was confirmed exactly as diagnosed below —
+stale prebuilt libs predating fix `af5630797c`. After
+`make -C libsrc/newlib cpm-clean && make -C libsrc/newlib cpm`, signed 8/16-bit
+`%` is C-correct on newlib for BOTH llvmz80 and stock sccz80 (`-30000 % 7 == -5`,
+`-100 % 7 == -2`). The verification test `xfail_signed_mod.{c,sh}` now PASSES on
+newlib (it stays as a regression guard / stale-lib detector). **Upstream action
+still wanted:** the z88dk distribution's committed prebuilt newlib archives
+should be regenerated so downstream users get the fix without a manual rebuild.
+
+Found 2026-07-23 while adding clang/llvmz80 integer-helper support for the newlib
+CP/M target; NOT a clang-specific issue — reproduces with stock z88dk sccz80 and
+sdcc.
 
 **Acceptance decision (user 2026-07-23):** treat this as a z88dk newlib bug;
 matching z88dk's own newlib result is "good enough for now". The llvmz80
