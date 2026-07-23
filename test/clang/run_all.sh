@@ -112,14 +112,9 @@ newlib_skip_reason() {
         runtime_printf_ieee.sh) echo "classic stdio.h -D__LLVMZ80_IEEE_PRINTF route; newlib %f is separate (plan Phase D)"; return 0 ;;
         xfail_bsearch.sh)       echo "newlib ships standard bsearch; the missing-bsearch gap is classic-only"; return 0 ;;
         runtime_file.sh)        echo "FILE* does not link on newlib (undefined asm_target_open_p1/p2)"; return 0 ;;
-        # Integer-helper gap: clang emits gcc-style libcalls (__mulhi3/__divsi3/
-        # __divmodsi4/__modsi3/__umodhi3) for runtime 16/32-bit mul/div/mod;
-        # newlib has no such symbols and the classic libsrc/l/llvmz80 bridge
-        # objects need classic-clib build context (config_private.inc + l_*
-        # cores) that -nostdlib newlib does not provide.  Distinct follow-up.
-        runtime_qsort.sh)       echo "clang __mulhi3/__umodhi3 libcalls (LCG) absent from newlib (integer-helper gap)"; return 0 ;;
-        runtime_intdiv.sh)      echo "clang __divmodsi4/__udivmodsi4 libcalls absent from newlib (integer-helper gap)"; return 0 ;;
-        runtime_long.sh)        echo "clang __divsi3/__modsi3 libcalls absent from newlib (integer-helper gap)"; return 0 ;;
+        # (The clang integer-helper libcalls __mulhi3/__divsi3/__divmodsi4/...
+        # are now provided on the newlib route by llvmz80_imath.lib -- see
+        # libsrc/l/llvmz80/newlib/ -- so runtime_qsort/intdiv/long PASS.)
     esac
     # The UNSUPPORTED sdcc_iy/sdcc_ix override forces -compiler=sdcc, so a
     # z88dk-ucpp -D__SDCC pass runs first and chokes on source-level __smallc /
