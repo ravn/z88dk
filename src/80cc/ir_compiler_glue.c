@@ -54,16 +54,51 @@ const SYMBOL *ir_namespace_bank_fn(const char *ns_name)
 }
 
 /* Spare index register for a loop-invariant resident — the one opposite the
-   frame pointer. c_framepointer_is_ix: 1=IX frame→spare IY, 0=IY frame→spare
-   IX, -1=sp-mode→IX (both free, pick IX). 808x/gbz80 have no index regs →
-   gate on CPU. */
+   frame pointer. c_framepointer_is_ix: 1=IX frame→spare IY, -1=sp-mode→IX (both
+   free, pick IX). 808x/gbz80 have no index regs → gate on CPU. A platform can
+   remove the spare from play: --reserve-regs-iy (the fp-mode spare) or, in
+   sp-mode, --reserve-regs-ix. */
 int ir_idx2_reg(void)
 {
     if (!c_idx2_invariant) return IR_PR_NONE;
-    if (getenv("IR_NO_IDX2")) return IR_PR_NONE;
+    if (opt_disabled("idx2")) return IR_PR_NONE;
     if (IS_808x() || IS_GBZ80()) return IR_PR_NONE;
-    if (c_framepointer_is_ix == 1) return IR_PR_IY;   /* frame IX → spare IY */
-    return IR_PR_IX;                                  /* frame IY, or sp-mode → IX */
+    if (c_framepointer_is_ix == 1)                    /* frame IX → spare IY */
+        return c_reserve_iy ? IR_PR_NONE : IR_PR_IY;
+    return c_reserve_ix ? IR_PR_NONE : IR_PR_IX;      /* sp-mode → IX */
+}
+
+/* Second index-register home = IY, available ONLY in true sp-mode (no frame
+   pointer): there IX is the idx2 spare and IY is otherwise free. In fp-modes
+   one index is the frame and the other is idx2, so no third index exists.
+   Needs index-half read/write/compare (ld iyl,c / sub iyl) → z80/z80n only
+   (z180 traps the undocumented index-half opcodes). Opt-in via c_idx3_residency
+   because some targets reserve IY. IY is callee-saved → the lowerer must
+   push/pop it in the prologue when a value is homed here. */
+int ir_idx3_reg(void)
+{
+    if (!c_idx3_residency) return IR_PR_NONE;
+    if (opt_disabled("idx3")) return IR_PR_NONE;
+    if (c_reserve_iy) return IR_PR_NONE;               /* IY reserved by platform */
+    if (ir_idx2_reg() != IR_PR_IX) return IR_PR_NONE;  /* need IX as idx2 */
+    if (c_framepointer_is_ix != -1) return IR_PR_NONE; /* IY is the frame */
+    if (!(c_cpu == CPU_Z80 || IS_Z80N())) return IR_PR_NONE;
+    return IR_PR_IY;
+}
+
+/* exx/alt-bank home for a loop-invariant word — sp-mode only, z80/z80n (the
+   A-bridge compare uses `exx` + A/flags surviving the swap). Opt-in via
+   c_exx_residency (targets may reserve the shadow set). Per-function gates
+   (float/FA using the alt bank, far-helper calls that exx) are applied in the
+   allocator where the Func is available. Uses BC' — HL'/DE' stay free as exx
+   scratch / for a second invariant later. */
+int ir_exx_reg(void)
+{
+    if (!c_exx_residency) return IR_PR_NONE;
+    if (opt_disabled("exx")) return IR_PR_NONE;
+    if (c_framepointer_is_ix != -1) return IR_PR_NONE;   /* sp-mode only */
+    if (!(c_cpu == CPU_Z80 || IS_Z80N())) return IR_PR_NONE;
+    return IR_PR_BC_ALT;
 }
 
 /* Bridge the lowerer's FILE* interface to the compiler's global
@@ -91,6 +126,28 @@ int ir_lower_to_output(Func *f)
             fwrite(chunk, 1, n, output);
     }
     fclose(mem);
+
+    /* -debug: emit the cdb stack local/param records now that slot assignment
+       is final. Locals get their real frame-base offset (vreg_spill_slot -
+       frame_size == slot_ix_off); params keep the frame-independent front-end
+       offset (they sit above the frame base, so it stays correct as the frame
+       grows). Register-resident locals with no slot are skipped (best-effort).
+       Parse-time STKLOC emission is deferred here (cdbfile.c). */
+    if (rc == 0 && c_debug_adb_defc && f->fn) {
+        for (int v = 0; v < f->n_vregs; v++) {
+            SYMBOL *s = f->vregs[v].sym;
+            if (!s || s->storage != STKLOC) continue;
+            int off;
+            if (f->vregs[v].flags & (IR_VREG_PARAM | IR_VREG_PARAM_IN_PLACE)) {
+                off = s->offset.i;
+            } else {
+                int slot = f->vreg_spill_slot ? f->vreg_spill_slot[v] : -1;
+                if (slot < 0) continue;
+                off = slot - f->frame_size;
+            }
+            debug_write_local_at(f->fn->name, s, off);
+        }
+    }
     return rc;
 }
 

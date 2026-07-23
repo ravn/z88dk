@@ -53,3 +53,4 @@ win32/.github/copilot-instructions.md
 # Local macOS native build markers/vendored deps (not upstream-tracked)
 /.macos-patched
 /third_party/
+src/z80nm/.tidy-stamp

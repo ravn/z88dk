@@ -273,6 +273,7 @@ static char           *cpp_incpath_first;
 static char           *cpp_incpath_last;
 static char           *comparg;
 static char           *clangarg;
+static char           *xccarg;
 static char           *linkargs;
 static char           *linker_libpath_first;
 static char           *linker_libpath_last;
@@ -600,6 +601,9 @@ static option options[] = {
 
     { 0, "", OPT_HEADER, "Compiler (ez80-clang) options:", NULL, NULL, 0 },
     { 0, "Cg", OPT_FUNCTION,  "Add an option to ez80-clang" , &clangarg, AddToArgs, 0},
+
+    { 0, "", OPT_HEADER, "Compiler (xcc) options:", NULL, NULL, 0 },
+    { 0, "Cx", OPT_FUNCTION,  "Add an option to ez80-clang" , &xccarg, AddToArgs, 0},
 
     { 0, "", OPT_HEADER, "Assembler options:", NULL, NULL, 0 },
     { 0, "Ca", OPT_FUNCTION,  "Add an option to the assembler" , &asmargs, AddToArgsQuoted, 0},
@@ -982,7 +986,7 @@ int main(int argc, char **argv)
 
     processing_user_command_line_arg = 0;
 
-    asmargs = linkargs = cpparg = clangarg =  NULL;
+    asmargs = linkargs = cpparg = clangarg = xccarg = NULL;
     linklibs = muststrdup("");
 
     cpp_incpath_first = cpp_incpath_last = NULL;
@@ -1533,9 +1537,9 @@ int main(int argc, char **argv)
             } else if (compiler_type == CC_XCC) {
                 char  *rules[MAX_COPT_RULE_FILES];
                 int    num_rules = 0;
-                rules[num_rules++] = c_sdccopt1;
-                rules[num_rules++] = c_sdccopt9;
+    
                 rules[num_rules++] = c_xcc_opt;
+                rules[num_rules++] = c_sdccopt9;
 
                 apply_copt_rules(i, num_rules, rules, ".opt", ".op1", ".asm");
 
@@ -3338,11 +3342,15 @@ static void configure_compiler(void)
         preprocarg = " -D__XCC";
         BuildOptions(&cpparg, preprocarg);
         c_compiler = "xcc";
-        add_option_to_compiler("-S -O2 --sdcccall 0 --c1mode");
+        add_option_to_compiler("-S -Of --sdcccall 0 --c1mode");
         c_cpp_exe = c_sdcc_preproc_exe;
         compiler_style = filter_outspecified_flag;
         BuildOptions(&asmargs, "-D__XCC");
         BuildOptions(&linkargs, "-D__XCC");
+
+        if (xccarg) {
+            add_option_to_compiler(xccarg);
+        }
     } else if (strcmp(c_compiler_type,"sccz80") == 0 ) {
         preprocarg = " -DSCCZ80 -DSMALL_C -D__SCCZ80";
         BuildOptions(&cpparg, preprocarg);

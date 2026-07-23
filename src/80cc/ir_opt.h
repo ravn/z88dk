@@ -65,6 +65,14 @@ int ir_opt_st2ld(Func *f);
  */
 int ir_opt_cse(Func *f);
 
+/* Spatial address CSE (clustered array access, e.g. a stencil's a[k], a[k-1],
+ * a[k+1]). Within a BB, memory accesses whose byte address is the same
+ * base+index expression differing only by a compile-time constant are made to
+ * share ONE computed anchor address, with the constant byte delta folded into
+ * each access's mem.offset. The redundant address chains die in DCE. Gated by
+ * IR_NO_ADDR_CSE; returns the number of accesses repointed. */
+int ir_opt_addr_cse(Func *f);
+
 /* Loop-invariant code motion (roadmap #3e).
  *
  * Detects loops via back-edge scan (a successor with id ≤ current BB
@@ -179,6 +187,11 @@ int ir_opt_const_fold(Func *f);
    sub-sums through DE/HL, blocking residency. Gated on c_word_resident
    (inert when off ⇒ byte-identical). Returns chains reassociated. */
 int ir_opt_reassoc_reduction(Func *f);
+
+/* Coalesce a left-leaning reduction chain `s=((s+a)+b)+c` (through single-use
+   spine temps) back into in-place `s=s+a; s=s+b; s=s+c`, so word_acc can DE-home
+   the accumulator. Gated on c_word_resident; IR_NO_REDUCE_COALESCE opts out. */
+int ir_opt_reduce_coalesce(Func *f);
 
 /* long_inc_mhl (the long (*p)++ triple → HCALL l_long_inc_mhl) lives
    in the ir_match table as `incmhl`; --opt-disable=pattern:incmhl. */

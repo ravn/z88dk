@@ -395,6 +395,28 @@ static const SYMBOL *deref_bank_fn(const Node *n)
     return ns ? ir_namespace_bank_fn(ns) : NULL;
 }
 
+/* True if a type is volatile-qualified, or (for a pointer type) points to a
+   volatile object. */
+static int type_or_pointee_volatile(const Type *t)
+{
+    if (!t) return 0;
+    if (t->isvolatile) return 1;
+    if (t->ptr && t->ptr->isvolatile) return 1;
+    return 0;
+}
+/* True if an indirect access through deref/index node `n` touches a volatile
+   object: the value type (n->type) carries it, or it lives on the pointer
+   operand's pointee type. Mirrors deref_bank_fn's navigation. Marks
+   op->mem.volatile_ so ir_match/ir_opt won't fuse the access and the lowerer
+   stamps it (copt won't elide a volatile load/store). */
+static int deref_is_volatile(const Node *n)
+{
+    if (!n) return 0;
+    if (type_or_pointee_volatile(n->type)) return 1;
+    if (n->operand && type_or_pointee_volatile(n->operand->type)) return 1;
+    return 0;
+}
+
 /* A __far pointer (KIND_CPTR): every access through it routes via an
    lp_* runtime helper (paging the bank in/out). Detected on the pointer
    node's own type. */
@@ -674,6 +696,15 @@ static int new_local_vreg(Builder *b, SYMBOL *sym)
     } else {
         int w = width_for_kind(k);
         b->f->vregs[v].width = (int16_t)(w ? w : 2);
+        /* -debug: home every scalar local in memory so a breakpoint can read
+           it. Mark it address-taken (escaped): unlike a plain — or even
+           volatile — never-escaped local (which 80cc legitimately keeps in a
+           register / folds away), an escaped local must stay coherent in its
+           frame slot across every statement, since it could be aliased. Its
+           ,B,1,d cdb record is emitted post-lowering from the real slot
+           (debug_write_local_at). Aggregates already get ADDR_TAKEN above. */
+        if (c_debug_adb_defc)
+            b->f->vregs[v].flags |= IR_VREG_ADDR_TAKEN;
     }
     /* volatile local: force a memory slot so every access is a real
        load/store (no register residency, const-prop or store-forward). */
@@ -1340,6 +1371,31 @@ static int emit_const_mult_sr(Builder *b, int v, int64_t C, int w)
         ir_emit_binop(cur_bb(b), IR_SUB, dst, hi, lo);
         return dst;
     }
+
+    /* General constant (>=3 non-run terms, e.g. an LCG's *181 or a hash's *31):
+       the Horner binary shift-add chain — acc = v (the top set bit), then for
+       each lower bit MSB->LSB: acc <<= 1 (double), and acc += v when the bit is
+       set. Cost = hi_bit doublings (each `add hl,hl`) + (pop-1) adds — the same
+       decomposition sdcc emits. Replaces the l_mult CALL with straight-line
+       code. Cost-gated by `hi_bit + pop` (the op count): l_mult is a slow
+       bit-serial 16x16, so for a WORD (each chain op is a single add hl,hl /
+       add hl,de) the inline chain wins across the whole range — inline any int
+       constant (max hi_bit+pop is 31). A LONG chain doubles/adds 32 bits per
+       step (several ops each) and competes with l_long_mult, so keep the
+       tighter bound there. (An LCG's *25173 = 14+7 = 21 was just over the old
+       flat 20 and fell to l_mult → histbench -41%.) */
+    if (hi_bit + pop <= (w == 2 ? 32 : 20)) {
+        int acc = v;                            /* coefficient for 2^hi_bit */
+        for (int bit = hi_bit - 1; bit >= 0; bit--) {
+            acc = sr_shift_left(b, acc, 1, w);  /* double */
+            if ((u >> bit) & 1u) {
+                int dst = new_temp_kind(b, kw);
+                ir_emit_binop(cur_bb(b), IR_ADD, dst, acc, v);
+                acc = dst;
+            }
+        }
+        return acc;
+    }
     return -1;
 }
 
@@ -1872,7 +1928,7 @@ static int build_float_compound(Builder *b, Node *n, const char *stem)
        Acc tier (FA model) keeps lhs-first — it doesn't use the DEHL stack. */
     int fc_commutative = !is_acc
         && (!strcmp(stem, "add") || !strcmp(stem, "mul"))
-        && getenv("IR_NO_F32_STACK_ARG") == NULL;
+        && !opt_disabled("f32-stack-arg");
     #define COMPOUND_ARITH(LV) (is_acc \
         ? emit_acc_binop(b, stem, (LV), rv) \
         : fc_commutative ? emit_float_arith(b, fk, stem, rv, (LV)) \
@@ -2662,6 +2718,12 @@ static int build_muldiv_float(Builder *b, Node *n, int *handled)
    combine in place with op k, store back. */
 static int build_compound_int(Builder *b, Node *n, OpKind k)
 {
+    /* Arithmetic-vs-logical `>>=`: signed LHS → arithmetic (IR_SHR_ARITH),
+       mirrored from the expression path. Stamped onto every IR_SHR this
+       function emits (const + variable forms). */
+    Type *cmp_lvt = n->left ? node_value_type(n->left) : NULL;
+    int64_t shr_arith_bit = (k == IR_SHR && !(cmp_lvt && cmp_lvt->isunsigned))
+                          ? IR_SHR_ARITH : 0;
     /* Bitfield compound assign: `bf op= rhs` == `bf = extract(bf) op rhs`,
        then a read-modify-write store. The generic paths below treat the
        LHS as the whole storage unit, which operates on the wrong bits
@@ -2690,7 +2752,7 @@ static int build_compound_int(Builder *b, Node *n, OpKind k)
             c->dst = t; c->src[0] = rhs; rhs = t;
         }
         int res = new_temp(b, 2); b->f->vregs[res].width = 2;
-        ir_emit_binop(cur_bb(b), k, res, cur, rhs);
+        { Op *o = ir_emit_binop(cur_bb(b), k, res, cur, rhs); o->imm |= shr_arith_bit; }
         return emit_bitfield_store(b, n->left->operand, bft, res,
                                    bft->isunsigned);
     }
@@ -2715,11 +2777,11 @@ static int build_compound_int(Builder *b, Node *n, OpKind k)
             if (n->right && n->right->ast_type == AST_LITERAL) {
                 Op *op = ir_op_emit(cur_bb(b), k);
                 op->dst = tmp; op->src[0] = lhs_v;
-                op->src[1] = -1; op->imm = (int64_t)n->right->zval;
+                op->src[1] = -1; op->imm = (int64_t)n->right->zval | shr_arith_bit;
             } else {
                 int rhs_v = build_expr(b, n->right);
                 if (rhs_v < 0) return -1;
-                ir_emit_binop(cur_bb(b), k, tmp, lhs_v, rhs_v);
+                { Op *o = ir_emit_binop(cur_bb(b), k, tmp, lhs_v, rhs_v); o->imm |= shr_arith_bit; }
             }
             Op *tr = ir_op_emit(cur_bb(b), IR_CONV_TRUNC);
             tr->dst = lhs_v; tr->src[0] = tmp;
@@ -2731,7 +2793,7 @@ static int build_compound_int(Builder *b, Node *n, OpKind k)
             op->dst    = lhs_v;
             op->src[0] = lhs_v;
             op->src[1] = -1;
-            op->imm    = (int64_t)n->right->zval;
+            op->imm    = (int64_t)n->right->zval | shr_arith_bit;
             return lhs_v;
         }
         int rhs_v = build_expr(b, n->right);
@@ -2749,7 +2811,7 @@ static int build_compound_int(Builder *b, Node *n, OpKind k)
             cv->dst = tmp; cv->src[0] = rhs_v;
             rhs_v = tmp;
         }
-        ir_emit_binop(cur_bb(b), k, lhs_v, lhs_v, rhs_v);  /* aliased */
+        { Op *o = ir_emit_binop(cur_bb(b), k, lhs_v, lhs_v, rhs_v); o->imm |= shr_arith_bit; }  /* aliased */
         return lhs_v;
     }
 
@@ -2772,11 +2834,11 @@ static int build_compound_int(Builder *b, Node *n, OpKind k)
         if (n->right && n->right->ast_type == AST_LITERAL) {
             Op *op = ir_op_emit(cur_bb(b), k);
             op->dst = dst_g; op->src[0] = loaded_g;
-            op->src[1] = -1; op->imm = (int64_t)n->right->zval;
+            op->src[1] = -1; op->imm = (int64_t)n->right->zval | shr_arith_bit;
         } else {
             int rhs_v = build_expr(b, n->right);
             if (rhs_v < 0) return -1;
-            ir_emit_binop(cur_bb(b), k, dst_g, loaded_g, rhs_v);
+            { Op *o = ir_emit_binop(cur_bb(b), k, dst_g, loaded_g, rhs_v); o->imm |= shr_arith_bit; }
         }
         Op *st_g = ir_op_emit(cur_bb(b), IR_ST_MEM);
         st_g->src[0] = dst_g; st_g->mem.kind = IR_MEM_SYM;
@@ -2810,6 +2872,7 @@ static int build_compound_int(Builder *b, Node *n, OpKind k)
     ld->mem.kind  = IR_MEM_VREG;
     ld->mem.base  = ptr_v;
     ld->mem.elem  = elem_k;
+    ld->mem.volatile_ = deref_is_volatile(n->left);
     ld->mem.bank_fn = bf;
     int dst = new_temp(b, elem_w);
     b->f->vregs[dst].width = elem_w;
@@ -2818,17 +2881,18 @@ static int build_compound_int(Builder *b, Node *n, OpKind k)
         op->dst    = dst;
         op->src[0] = loaded;
         op->src[1] = -1;
-        op->imm    = (int64_t)n->right->zval;
+        op->imm    = (int64_t)n->right->zval | shr_arith_bit;
     } else {
         int rhs_v = build_expr(b, n->right);
         if (rhs_v < 0) return -1;
-        ir_emit_binop(cur_bb(b), k, dst, loaded, rhs_v);
+        { Op *o = ir_emit_binop(cur_bb(b), k, dst, loaded, rhs_v); o->imm |= shr_arith_bit; }
     }
     Op *st = ir_op_emit(cur_bb(b), IR_ST_MEM);
     st->src[0]    = dst;
     st->mem.kind  = IR_MEM_VREG;
     st->mem.base  = ptr_v;
     st->mem.elem  = elem_k;   /* NOT ld->mem.elem — `ld` may be realloc-stale */
+    st->mem.volatile_ = deref_is_volatile(n->left);
     st->mem.bank_fn = bf;
     return dst;
 }
@@ -3319,6 +3383,7 @@ static int build_expr_hinted(Builder *b, Node *n, int hint)
             ld->mem.elem = (elem_w == 1) ? KIND_CHAR
                          : (elem_w == 2) ? KIND_INT
                          :                 KIND_LONG;
+            ld->mem.volatile_ = deref_is_volatile(n);
             ld->mem.bank_fn = (SYMBOL *)deref_bank_fn(n);  /* `*p++` into a space */
             if (!is_pre) EMIT_BUMP();
             #undef EMIT_BUMP
@@ -3674,7 +3739,8 @@ static int build_expr_hinted(Builder *b, Node *n, int hint)
            and uses an overlapping-`ldir` fill for larger ones. Any const
            count (1..65536, ldir's BC limit) inlines; non-const falls
            through to the library memset (redirected below). */
-        if (strcmp(n->sym->name, "__builtin_memset") == 0
+        if (!c_disable_builtins
+            && strcmp(n->sym->name, "__builtin_memset") == 0
             && n_args == 3) {
             Node *cnt = array_get_byindex(n->args, 2);
             if (cnt && cnt->ast_type == AST_LITERAL
@@ -3697,7 +3763,8 @@ static int build_expr_hinted(Builder *b, Node *n, int hint)
            tiny counts unroll, larger ones use `ldir`, any const count
            (1..65536) inlines; non-const falls back to the library
            memcpy. memcpy returns dst (the dst vreg still holds it). */
-        if (strcmp(n->sym->name, "__builtin_memcpy") == 0
+        if (!c_disable_builtins
+            && strcmp(n->sym->name, "__builtin_memcpy") == 0
             && n_args == 3) {
             Node *cnt = array_get_byindex(n->args, 2);
             if (cnt && cnt->ast_type == AST_LITERAL
@@ -3718,7 +3785,8 @@ static int build_expr_hinted(Builder *b, Node *n, int hint)
         /* Inline __builtin_strcpy (always — variable length, no const
            needed): IR_STRCPY (dst, src), lowered to a NUL-terminated
            copy loop. strcpy returns dst. */
-        if (strcmp(n->sym->name, "__builtin_strcpy") == 0
+        if (!c_disable_builtins
+            && strcmp(n->sym->name, "__builtin_strcpy") == 0
             && n_args == 2 && ir_inline_block_ops_ok()) {
             int dst_v = build_expr(b, array_get_byindex(n->args, 0));
             if (dst_v < 0) return -1;
@@ -3734,21 +3802,33 @@ static int build_expr_hinted(Builder *b, Node *n, int hint)
            string, src[1] = char vreg (or -1 + imm for a literal char),
            lowered to a scan loop leaving the match pointer / NULL in the
            result vreg. */
-        if (strcmp(n->sym->name, "__builtin_strchr") == 0
+        if (!c_disable_builtins
+            && strcmp(n->sym->name, "__builtin_strchr") == 0
             && n_args == 2 && ir_inline_block_ops_ok()) {
             Node *c_node = array_get_byindex(n->args, 1);
             int str_v = build_expr(b, array_get_byindex(n->args, 0));
             if (str_v < 0) return -1;
+            /* Evaluate the search-char operand BEFORE emitting IR_STRCHR
+               (mirrors the strcpy builder above).  Emitting the op first and
+               then build_expr()ing the char appended the char's loads AFTER
+               the op that consumes them — a use-before-def that reached the
+               lowerer with the operand in no register and no slot (abort). */
+            int c_v = -1, c_imm = 0, c_is_literal = 0;
+            if (c_node && c_node->ast_type == AST_LITERAL) {
+                c_is_literal = 1;
+                c_imm = (int)c_node->zval;   /* literal search char */
+            } else {
+                c_v = build_expr(b, c_node);
+                if (c_v < 0) return -1;
+            }
             int dst = new_temp_kind(b, KIND_INT);
             Op *op = ir_op_emit(cur_bb(b), IR_STRCHR);
             op->dst    = dst;
             op->src[0] = str_v;          /* string pointer */
-            if (c_node && c_node->ast_type == AST_LITERAL) {
+            if (c_is_literal) {
                 op->src[1] = -1;
-                op->imm    = (int)c_node->zval;   /* literal search char */
+                op->imm    = c_imm;
             } else {
-                int c_v = build_expr(b, c_node);
-                if (c_v < 0) return -1;
                 op->src[1] = c_v;        /* search char value */
             }
             return dst;
@@ -4405,9 +4485,26 @@ static int build_expr_hinted(Builder *b, Node *n, int hint)
            word via the arm MOVs. */
         int rw = n->type ? width_for_kind(n->type->kind) : 2;
         if (rw <= 0) rw = 2;
-        int result  = get_dest_vreg(b, hint, rw);
-        b->f->vregs[result].width = (int16_t)rw;
-        if (n->type) b->f->vregs[result].kind = n->type->kind;
+        Kind rk = n->type ? (Kind)n->type->kind : KIND_INT;
+        /* Reuse the caller's hint only when it ALREADY has the ternary's type.
+           Stamping the hint's kind/width to the ternary type corrupts a live
+           variable of a different type: `long v = c ? i-j : 0` passes v (long)
+           as the hint, and re-typing it to the int ternary makes the arms store
+           2 bytes into the 4-byte local — a later consistency pass restores v to
+           long/width-4 while the arm binop keeps int operands, so the widened
+           read aborts (register-only) or silently reads garbage. Fresh temp of
+           the ternary's own type otherwise; the caller (build_assign) converges
+           the width with a CONV. */
+        int result;
+        if (hint >= 0
+            && b->f->vregs[hint].width == (int16_t)rw
+            && (Kind)b->f->vregs[hint].kind == rk) {
+            result = hint;
+        } else {
+            result = new_temp(b, rw);
+            b->f->vregs[result].width = (int16_t)rw;
+            b->f->vregs[result].kind  = rk;
+        }
 
         /* Short-circuit the condition (arms produce the value). Targets are
            pre-created above so their ids stay above the test block. */
@@ -4852,8 +4949,31 @@ static int build_assign(Builder *b, Node *n)
            scaling in the AST_LITERAL handler. */
         int rhs_v = build_expr_hinted(b, n->right, dst_v);
         if (rhs_v < 0) return -1;
-        if (rhs_v != dst_v)
-            ir_emit_mov(cur_bb(b), dst_v, rhs_v);
+        if (rhs_v != dst_v) {
+            /* Converge width before the copy: build_expr_hinted may return a
+               vreg NARROWER than the integer local (a plain int variable, or a
+               const-multiply strength-reduce result, assigned to a `long`). A
+               bare MOV would leave the high bytes unset — garbage, or a
+               register-only source aborting in load_to_dehl. Sign/zero-extend
+               (long long via the accumulator) — mirrors the global store path. */
+            int rhs_w = b->f->vregs[rhs_v].width;
+            if (rhs_w != ldst_w && is_acc_int_kind(lk)) {
+                rhs_v = promote_to_acc_int(b, rhs_v,
+                            n->right && n->right->type
+                            && n->right->type->isunsigned);
+                if (rhs_v < 0) return -1;
+            } else if (rhs_w != ldst_w && (ldst_w == 2 || ldst_w == 4)) {
+                OpKind cv = (rhs_w > ldst_w)
+                    ? IR_CONV_TRUNC
+                    : (n->right->type && n->right->type->isunsigned
+                       ? IR_CONV_ZX : IR_CONV_SX);
+                Op *op = ir_op_emit(cur_bb(b), cv);
+                op->dst = dst_v; op->src[0] = rhs_v;
+                return dst_v;
+            }
+            if (rhs_v != dst_v)
+                ir_emit_mov(cur_bb(b), dst_v, rhs_v);
+        }
         return dst_v;
     }
     /* Non-local LHS: for a float-literal RHS heading into an
@@ -5185,6 +5305,7 @@ static int build_assign(Builder *b, Node *n)
         op->mem.elem = (elem_w == 1) ? KIND_CHAR
                      : (elem_w == 2) ? KIND_INT
                      :                 KIND_LONG;
+        op->mem.volatile_ = deref_is_volatile(n->left);
         op->mem.bank_fn = bf;
         return rhs_v;
     }
@@ -5340,6 +5461,7 @@ static int build_assign(Builder *b, Node *n)
         op->mem.elem = (elem_w == 1) ? KIND_CHAR
                      : (elem_w == 2) ? KIND_INT
                      :                 KIND_LONG;
+        op->mem.volatile_ = deref_is_volatile(n->left);
         op->mem.bank_fn = bf;
         return rhs_v;
     }
@@ -5839,6 +5961,50 @@ static int build_cast(Builder *b, Node *n)
     return build_fail("OP_CAST %d→%d not yet supported", src_w, dst_w);
 }
 
+/* Emit a native hardware multiply op: dst(width) = l * r. imm carries the
+   unsigned flag (1=unsigned, 0=signed); the lowerer selects 8x8 vs 16x16 from
+   the operand vreg width. Only called under the CPU/width guards below. */
+static int emit_ir_mul(Builder *b, int l, int r, int width, int unsigned_op)
+{
+    int dst = new_temp(b, width);
+    b->f->vregs[dst].width = (int16_t)width;
+    Op *op = ir_op_emit(cur_bb(b), IR_MUL);
+    op->dst = dst; op->src[0] = l; op->src[1] = r;
+    op->imm = unsigned_op ? 1 : 0;
+    return dst;
+}
+
+/* Narrowing-multiply source: if `nd` is an unsigned value that fits in 16 bits
+   (possibly widened to a long by explicit casts, e.g. `(unsigned long)a`), return
+   the ≤16-bit unsigned sub-expression to build in its place; else NULL. Peels
+   widening unsigned casts (cast source lives in ->operand). A signed source is
+   rejected — `(unsigned long)(int x)` for x<0 is a large 32-bit value, not a u16;
+   a truncating cast (`(unsigned short)long_expr`) stops the peel and its u16 result
+   is itself a valid narrow operand. */
+static Node *mul_u16_narrow_src(Node *nd)
+{
+    Node *cur = nd;
+    while (cur && cur->ast_type == OP_CAST && cur->operand && cur->operand->type
+           && cur->type && cur->type->isunsigned
+           && type_width(cur->type) >= type_width(cur->operand->type))
+        cur = cur->operand;
+    if (cur && cur->type && cur->type->isunsigned && type_width(cur->type) <= 2)
+        return cur;
+    return NULL;
+}
+
+/* Zero-extend a ≤16-bit unsigned operand vreg to exactly width 2 (a char u8
+   widens to u16 for the 16x16 helper's HL/DE arg). */
+static int widen_u16_to_int(Builder *b, int v)
+{
+    if (v < 0 || b->f->vregs[v].width >= 2) return v;
+    int t = new_temp(b, 2);
+    b->f->vregs[t].width = 2;
+    Op *cv = ir_op_emit(cur_bb(b), IR_CONV_ZX);
+    cv->dst = t; cv->src[0] = v;
+    return t;
+}
+
 static int build_muldiv_integer(Builder *b, Node *n)
 {
     Kind lk = n->left  && n->left->type  ? n->left->type->kind  : KIND_NONE;
@@ -5848,12 +6014,68 @@ static int build_muldiv_integer(Builder *b, Node *n)
     Kind flt_k   = lk;
     int is_flt   = kind_is_floating(lk) || kind_is_floating(rk)
                 || (n->type && kind_is_floating(n->type->kind));
+    /* Narrowing multiply: `(unsigned long)u16 * u16` → the 16x16→32 helper
+       l_mulu_32_16x16 (dehl = hl * de) instead of widening both operands to 32
+       bits for l_long_mult_u. The canonical helper dispatches to native hardware
+       multiply on z180/ez80/z80n/kc160/rabbit and the size/speed loop on z80.
+       Unsigned only (no signed 16x16→32 helper). Checked before building the
+       operands so the wide casts are never emitted (no double-evaluation).
+       IR_NO_NARROW_MUL opts out. */
+    if (n->ast_type == OP_MULT && !is_flt && !is_fix16 && !is_fix32
+        && n->type && type_width(n->type) == 4
+        && !IS_808x() && !IS_GBZ80()   /* l_mulu_32_16x16 undefined there */
+        && !opt_disabled("narrow-mul")) {
+        Node *ln = mul_u16_narrow_src(n->left);   /* type width <= 2, unsigned */
+        Node *rn = mul_u16_narrow_src(n->right);
+        if (ln && rn) {
+            int lv = build_expr(b, ln);
+            if (lv < 0) return -1;
+            int rv = build_expr(b, rn);
+            if (rv < 0) return -1;
+            lv = widen_u16_to_int(b, lv);         /* u8 -> u16 for HL/DE */
+            rv = widen_u16_to_int(b, rv);
+            int dst = new_temp(b, 4);
+            b->f->vregs[dst].width = 4;
+            Op *op = ir_op_emit(cur_bb(b), IR_HCALL);
+            op->dst = dst;
+            HelperInfo *hi = calloc(1, sizeof(HelperInfo));
+            int *args = calloc(2, sizeof(int));
+            args[0] = lv; args[1] = rv;   /* HL, DE (multiply is commutative) */
+            hi->name = "l_mulu_32_16x16";
+            hi->args = args; hi->n_args = 2; hi->n_stacked = 0;
+            hi->ret_vreg = dst; hi->ret_in_de = 0;
+            op->hcall = hi;
+            return dst;
+        }
+    }
     int l = build_expr(b, n->left);
     if (l < 0) return -1;
     int r = build_expr(b, n->right);
     if (r < 0) return -1;
+    /* Hardware char*char multiply — matched BEFORE the int promotion so the
+       operands stay bytes for the 8x8 hardware multiply. kc160 has signed and
+       unsigned 8x8 (mul/muls hl), so it takes any same-signedness char pair;
+       z180/ez80/z80n have unsigned-only 8x8 (mlt / mul de), so unsigned char
+       only (signed char falls through to the promotion + helper path). Mixed
+       signedness falls through too (promotes each operand by its own sign). */
+    if (n->ast_type == OP_MULT
+        && b->f->vregs[l].width == 1 && b->f->vregs[r].width == 1) {
+        int lu = n->left  && n->left->type  && n->left->type->isunsigned;
+        int ru = n->right && n->right->type && n->right->type->isunsigned;
+        if (IS_KC160() && lu == ru)
+            return emit_ir_mul(b, l, r, 2, lu);
+        if ((c_cpu == CPU_Z180 || IS_EZ80() || IS_Z80N()) && lu && ru)
+            return emit_ir_mul(b, l, r, 2, 1);
+    }
     int width = b->f->vregs[l].width;
     if (b->f->vregs[r].width > width) width = b->f->vregs[r].width;
+    /* C integer promotion: mul/div/mod have no byte-width helper, so a
+       char operand must widen to int (>=2) BEFORE the HCALL. Without this
+       floor two char operands share width 1, skip the conversion below,
+       and reach l_div/l_mult as bytes — gen_hcall then zero-extends each
+       (`ld h,0`), silently dropping the sign of a signed char (`-100/7`
+       became 156/7). */
+    if (width < 2) width = 2;
     /* Converge mixed-width operands to the helper width BEFORE
        the HCALL: gen_hcall marshals each arg by its vreg width,
        so a narrower operand hands the helper a garbage high half
@@ -5902,6 +6124,10 @@ static int build_muldiv_integer(Builder *b, Node *n)
     int unsigned_op = (n->type && n->type->isunsigned)
         || (n->left  && n->left->type  && n->left->type->isunsigned)
         || (n->right && n->right->type && n->right->type->isunsigned);
+    /* kc160: 16x16 int multiply is a single `mul de,hl` (low 16 bits are
+       sign-agnostic, so the unsigned form serves signed and unsigned alike). */
+    if (n->ast_type == OP_MULT && IS_KC160() && width == 2)
+        return emit_ir_mul(b, l, r, 2, 1);
     const char *helper;
     int n_stacked = 0;
     int ret_in_de = 0;
@@ -6109,15 +6335,63 @@ static int build_binop_integer(Builder *b, Node *n, OpKind k, int hint)
        count is an imm / width-2 vreg, not an arithmetic operand);
        pointer results keep 16-bit address math. */
     int is_shift = (k == IR_SHL || k == IR_SHR);
-    int is_ptrish = (n->type && n->type->kind == KIND_PTR)
-                 || (lhs->type && lhs->type->kind == KIND_PTR);
+    /* Arithmetic (signed) right shift marker for the emitted IR_SHR. A `>>`
+       is arithmetic iff the shifted (left) operand is signed — the parser's
+       OP_USHR/OP_SSHR split is unreliable across casts (#289), so read the
+       LHS value type's signedness directly, exactly as the i64 path does. */
+    Type *shift_lvt = node_value_type(n->left);
+    int64_t shr_arith_bit = (k == IR_SHR && !(shift_lvt && shift_lvt->isunsigned))
+                          ? IR_SHR_ARITH : 0;
+    int is_ptrish = (n->type && (n->type->kind == KIND_PTR
+                                 || n->type->kind == KIND_ARRAY))
+                 || (lhs->type && (lhs->type->kind == KIND_PTR
+                                   || lhs->type->kind == KIND_ARRAY));
+    /* Byte compare against a byte-range constant: an unsigned char compared to a
+       constant in [0,255] (`c == ' '`, `c >= 'a'`, `c <= 'z'`) stays a byte `cp`
+       instead of widening c to int for a 16-bit compare — the C-promotion is
+       value-preserving here, and a widened compare reloads/extends c per test
+       (lexbench classify: ~7 instrs/test vs 2). All EQ/NE and unsigned relations:
+       ULE/UGT are canonicalised below to `<K+1`/`>=K+1` at the kept byte width, so
+       K<=254 folds to a byte ULT/UGE and K==255 constant-folds (`eff>=tmax`) — both
+       correct. Unsigned LHS so the zero-extended value is exactly the byte. */
+    int keep_byte_cmp = 0;
+    if (is_cmp && width == 1 && rhs && rhs->ast_type == AST_LITERAL
+        && lhs->type) {
+        int64_t C = (int64_t)rhs->zval;
+        if (lhs->type->isunsigned
+            && C >= 0 && C <= 255
+            && (k == IR_CMP_EQ  || k == IR_CMP_NE
+                || k == IR_CMP_ULT || k == IR_CMP_UGE
+                || k == IR_CMP_ULE || k == IR_CMP_UGT))
+            keep_byte_cmp = 1;
+        /* Signed char EQ/NE: byte-pattern equality is bias-free (a `cp K` sets Z
+           iff the bytes match, sign-independent). Restrict to a printable-range
+           constant [0,127] — a signed byte genuinely holds those values, and the
+           existing byte-`cp` lowering already accepts [0,255], so no relational
+           +128 bias path is needed. (Signed relational — `c < 0` — would need
+           that bias; left widened.) Covers `char c == 'x'` for plain (signed by
+           default) char, the common text-scan form. */
+        else if (!lhs->type->isunsigned
+                 && (k == IR_CMP_EQ || k == IR_CMP_NE)
+                 && C >= 0 && C <= 127)
+            keep_byte_cmp = 1;
+        /* Signed char relational (`c < ' '`, `c >= '0'`): kept a byte and lowered
+           with the +128 bias (`xor 0x80; cp K^0x80` → unsigned cp) instead of
+           sign-extend + 16-bit compare. Const in the signed-char range [-128,127];
+           `c REL 0` is taken by the sign-test path in the lowerer. */
+        else if (!lhs->type->isunsigned
+                 && (k == IR_CMP_LT || k == IR_CMP_GE
+                     || k == IR_CMP_LE || k == IR_CMP_GT)
+                 && C >= -128 && C <= 127)
+            keep_byte_cmp = 1;
+    }
     /* Widen the LHS to the RESULT width when the literal RHS or
        the expression type is wider than the LHS vreg. The
        commutative swap above moves literals to the RHS, so
        `0x01000100UL + i` arrives with l = i (width 2) and a LONG
        literal — else the add runs at 16 bits, truncating the
        constant to its low word. */
-    if (!is_shift && !is_ptrish
+    if (!is_shift && !is_ptrish && !keep_byte_cmp
         && rhs && rhs->ast_type == AST_LITERAL) {
         int tw = width;
         if (rhs->type && is_register_int_kind(rhs->type->kind)
@@ -6190,7 +6464,7 @@ static int build_binop_integer(Builder *b, Node *n, OpKind k, int hint)
         op->dst    = dst;
         op->src[0] = l;
         op->src[1] = -1;
-        op->imm    = imm;
+        op->imm    = imm | shr_arith_bit;
         b->f->vregs[dst].width = (int16_t)dst_w;
         return dst;
     }
@@ -6211,6 +6485,27 @@ static int build_binop_integer(Builder *b, Node *n, OpKind k, int hint)
        BOTH operands at the binop width, so a narrower vreg would
        contribute a garbage high half. Shifts keep their width-2
        count; pointer math stays 16-bit. */
+    /* Pointer/array + integer: the address stays 16-bit, so the index is
+       converged to the BASE width — a WIDER index (`arr[longvar]`) is TRUNCATED
+       (not widened into the base, which would sign-extend the base pointer to a
+       bogus 4-byte "address" then read a register-only DEHL as a 16-bit address:
+       sp masks it, fp aborts), and a NARROWER index (`arr[char_c]`) is extended
+       as before. CPTR is a genuine 4-byte far pointer, so its arithmetic keeps
+       width 4 (excluded from is_ptrish). */
+    if (is_ptrish && !is_shift && !is_cmp
+        && b->f->vregs[r].width != width) {
+        OpKind cvk;
+        if (b->f->vregs[r].width > width)
+            cvk = IR_CONV_TRUNC;
+        else
+            cvk = (!rhs->type || rhs->type->isunsigned)
+                ? IR_CONV_ZX : IR_CONV_SX;
+        int wtmp = new_temp(b, width);
+        b->f->vregs[wtmp].width = (int16_t)width;
+        Op *cv = ir_op_emit(cur_bb(b), cvk);
+        cv->dst = wtmp; cv->src[0] = r;
+        r = wtmp;
+    }
     if (!is_shift && !is_ptrish
         && b->f->vregs[r].width != width) {
         if (b->f->vregs[r].width > width) {
@@ -6235,7 +6530,8 @@ static int build_binop_integer(Builder *b, Node *n, OpKind k, int hint)
         }
     }
     int dst = get_dest_vreg(b, hint, dst_w);
-    ir_emit_binop(cur_bb(b), k, dst, l, r);
+    Op *bop = ir_emit_binop(cur_bb(b), k, dst, l, r);
+    if (shr_arith_bit) bop->imm |= shr_arith_bit;   /* variable-count signed >> */
     b->f->vregs[dst].width = (int16_t)dst_w;
     /* Pointer DIFFERENCE: `p - q` yields the element COUNT, not the
        byte difference — divide the IR_SUB result by sizeof(*p) when
@@ -6327,6 +6623,19 @@ static int emit_cond_false_exit(Builder *b, Node *n, int false_bb)
             return build_fail("OP_ANDAND with missing operand");
         if (emit_cond_false_exit(b, n->left, false_bb) != 0) return -1;
         return emit_cond_false_exit(b, n->right, false_bb);
+    case OP_OROR: {
+        /* Polarity-flipped nest (`||` under `&&`): `A || B` is FALSE iff both are
+           false. Branch-lower via a "n is true" continuation so the leaves stay
+           branch-fused (byte cp) rather than materialising boolean values. */
+        if (!n->left || !n->right)
+            return build_fail("OP_OROR with missing operand");
+        int ft = ir_bb_new(b->f);
+        if (emit_cond_true_exit(b, n->left, ft) != 0) return -1;      /* A true → ft */
+        if (emit_cond_false_exit(b, n->right, false_bb) != 0) return -1; /* B false → false_bb */
+        ir_emit_br(cur_bb(b), ft);                                    /* B true → ft */
+        b->cur_bb_id = ft;
+        return 0;
+    }
     case OP_LNEG:   /* !x is false ⟺ x is true → x-true exits to false_bb */
         if (!n->operand) return build_fail("OP_LNEG with missing operand");
         return emit_cond_true_exit(b, n->operand, false_bb);
@@ -6349,6 +6658,20 @@ static int emit_cond_true_exit(Builder *b, Node *n, int true_bb)
             return build_fail("OP_OROR with missing operand");
         if (emit_cond_true_exit(b, n->left, true_bb) != 0) return -1;
         return emit_cond_true_exit(b, n->right, true_bb);
+    case OP_ANDAND: {
+        /* Polarity-flipped nest (`&&` under `||`, e.g. classify's
+           `(c>='a'&&c<='z') || …`): `A && B` is TRUE iff both are true.
+           Branch-lower via a "n is false" continuation so the leaves stay
+           branch-fused (byte cp) rather than materialising boolean values. */
+        if (!n->left || !n->right)
+            return build_fail("OP_ANDAND with missing operand");
+        int ft = ir_bb_new(b->f);
+        if (emit_cond_false_exit(b, n->left, ft) != 0) return -1;     /* A false → ft */
+        if (emit_cond_true_exit(b, n->right, true_bb) != 0) return -1;/* B true → true_bb */
+        ir_emit_br(cur_bb(b), ft);                                    /* B false → ft */
+        b->cur_bb_id = ft;
+        return 0;
+    }
     case OP_LNEG:   /* !x is true ⟺ x is false → x-false exits to true_bb */
         if (!n->operand) return build_fail("OP_LNEG with missing operand");
         return emit_cond_false_exit(b, n->operand, true_bb);
@@ -6807,6 +7130,8 @@ static int ir_generate_code_impl(Node *body, SYMBOL *fn)
     if (!f) return build_fail("ir_func_new returned NULL");
     f->cpu = (uint32_t)c_cpu;   /* one-hot CPU id; ir_match gates patterns on it */
     f->idx2_reg = ir_idx2_reg();
+    f->idx3_reg = ir_idx3_reg();
+    f->exx_reg  = ir_exx_reg();
     /* Wide memory-accumulator primitive names for the active maths mode —
        the lowerer's generic MOV/LD_MEM/ST_MEM/RET/CALL paths read these
        (keeps ir_lower decoupled from c_fp_size / the maths table). */

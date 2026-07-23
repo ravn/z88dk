@@ -67,11 +67,24 @@ typedef enum {
     IR_PR_B,           /* width-1 byte home: high half of BC (headroom) */
     IR_PR_IX,
     IR_PR_IY,
+    /* width-1 byte homes in index-register halves (z80/z80n/ez80 only —
+       ld a,iyl / ld iyl,a / add a,iyl etc.). SLOTLESS and clobber-free in a
+       no-call region (the operand loader never stages in an index reg), so
+       unlike PR_E/PR_D they need no backing slot, lazy-spill, or cross-BB carry:
+       the value rides the half from its def for the whole region. */
+    IR_PR_IXL, IR_PR_IXH, IR_PR_IYL, IR_PR_IYH,
     IR_PR_DEHL,        /* 32-bit pair occupying DE and HL together */
     IR_PR_AF_ALT,
     IR_PR_HL_ALT,
     IR_PR_DE_ALT,
     IR_PR_BC_ALT,
+    /* Stack-transient spill: a width-2 value with a single def and single use in
+       one straight-line span, spilled NOT to a frame slot but to the stack —
+       `push hl` at the def (value kept in HL), `pop` at the use. No frame slot,
+       and push/pop (1 byte each) beat the slot store+reload. cur_sp_adjust is
+       held +2 across the span so intervening sp-relative slot accesses stay
+       correct. See ir_stack_spill (ir_alloc). */
+    IR_PR_STACK,
     IR_PR_SPILL = 0xFE /* not in any register — frame slot */
 } PhysReg;
 
@@ -87,6 +100,24 @@ typedef enum {
                                         caller's pushed-arg slot — no
                                         prologue copy, no local frame
                                         slot */
+    IR_VREG_NO_SLOT        = 1 << 6, /* A-only byte temp: every def is
+                                        dst-dead (kept in A, never spilled) and
+                                        every use is cache-served, so the value
+                                        never touches a frame slot. ir_assign_slots
+                                        reserves none — shrinking frame_size.
+                                        Set by compute_no_slot_bytes. */
+    IR_VREG_BC_PACK        = 1 << 7, /* Call-free-interval word temp packed into
+                                        BC by ir_bc_pack (IR_NO_BC_PACK opts out). Its
+                                        live range is single-BB, iteration-local
+                                        (never carried across the back-edge) and
+                                        BC-clean, so it is never live across a
+                                        call — gen_call's whole-function BC-save
+                                        must ignore it (Part 1). Slotless like any
+                                        PR_BC vreg (stamped `ld bc,hl` at its def). */
+    IR_VREG_DE_PACK        = 1 << 8, /* LRA Phase 1: single-BB call-free word temp
+                                        locally allocated to DE (op_clobbers-clean
+                                        span, DE otherwise idle). DE sibling of
+                                        BC_PACK; call-free so gen_call ignores it. */
 } VRegFlags;
 
 typedef struct {
@@ -96,7 +127,7 @@ typedef struct {
                            locals, overloaded as the slot byte count
                            (int16_t fits arrays up to ~32KB). */
     SYMBOL  *sym;       /* backing sym (NULL = compiler temp) */
-    uint8_t  flags;     /* VRegFlags bitset */
+    uint16_t flags;     /* VRegFlags bitset (>8 bits: IR_VREG_DE_PACK=1<<8) */
 } VReg;
 
 /* ----- Memory operand --------------------------------------------------- */
@@ -166,7 +197,17 @@ typedef enum {
     IR_OR,
     IR_XOR,
     IR_SHL,
-    IR_SHR,             /* unsigned shift right; SAR variant via Kind+sign */
+    IR_SHR,             /* shift right. Logical by default; the ARITHMETIC
+                           (signed) variant sets IR_SHR_ARITH in `imm` — see
+                           below. Register shape is identical either way, so
+                           every analysis/alloc/opt site treats them the same;
+                           only the lowerer (gen_shr) reads the bit. */
+    IR_MUL,             /* dst = src[0] * src[1] via native hardware multiply.
+                           Emitted only by build_muldiv_integer for CPUs with a
+                           hardware multiply: kc160 (mul/muls hl 8x8, mul de,hl
+                           16x16), z180/ez80 (mlt, unsigned 8x8), z80n (mul de,
+                           unsigned 8x8). imm=1 unsigned / 0 signed; operand
+                           width selects 8x8 (byte) vs 16x16 (word). */
 
     /* unary */
     IR_NEG,
@@ -198,6 +239,23 @@ typedef enum {
     IR_BR,              /* unconditional jump to mem.label (BB id in .imm) */
     IR_BR_COND,         /* if src[0] != 0: jump */
     IR_BR_ZERO,         /* if src[0] == 0: jump (fastpath for cmp→branch fusion) */
+    IR_COPY_STEP_BRZ,   /* fused byte copy-loop step (`while ((*d++ = *s++))`):
+                           a = *src[0]; *src[1] = a; src[0] += imm; src[1] += imm;
+                           if a == 0 jump to label. src[0]=source ptr, src[1]=dest
+                           ptr, imm=±1 step. Defines src[0] and src[1] (both
+                           stepped) — no separate byte-temp vreg, so nothing
+                           spills. Conditional (falls through like BR_ZERO); the
+                           BB's loop-back BR follows. Built by ir_match copystep
+                           from LD_MEM(post)+ST_MEM(post)+BR_ZERO. */
+    IR_DEREF_CMP_BR,    /* fused byte-deref compare-and-branch (memcmp/strcmp idiom
+                           `if (a[i] != b[i])`): compare *src[0] vs *src[1] (byte)
+                           and branch to `label` when equal (imm bit 0 = 1) or when
+                           not-equal (imm bit 0 = 0). Lowers to `ld a,(pa);
+                           <pb→hl>; cp (hl); jp z/nz`, so the two byte derefs never
+                           materialise to slots. src[0]/src[1] are the two pointer
+                           vregs (offset-0, no post-step; stepping stays separate).
+                           Conditional (falls through like BR_ZERO). Built by
+                           ir_match derefcmp from LD_MEM+LD_MEM+CMP_EQ/NE+BR. */
     IR_SWITCH,          /* multi-way dispatch on src[0] — SwitchInfo.
                            Lowers to the l_case / l_long_case inline
                            table (char: inline cp chain). Terminator;
@@ -325,6 +383,13 @@ typedef enum {
 
     IR_OP_COUNT
 } OpKind;
+
+/* IR_SHR arithmetic (signed) marker, carried in the high bits of Op.imm so it
+   rides along every op-copy for free and stays invisible to the count reads
+   (which mask `& 0x1f`) and the width-mask folds (widths ≤4 → bit ≤31). A
+   dedicated bit rather than a new opcode keeps IR_SHR's register shape single
+   across analysis/alloc/opt. */
+#define IR_SHR_ARITH ((int64_t)1 << 40)
 
 /* ----- ABI / call descriptors ------------------------------------------ */
 
@@ -466,6 +531,13 @@ typedef struct {
     SwitchInfo *sw;         /* IR_SWITCH only — heap allocated */
     const char *asm_text;   /* IR_ASM raw asm payload */
 
+    /* LRA Phase 4: stage src[1] into BC (`add hl,bc`/`sbc hl,bc`) rather than
+       DE, so a DE-packed value (IR_VREG_DE_PACK) survives this op untouched.
+       Set by ir_bc_pack when it commits a DE placement whose span covers this
+       ADD/SUB/CMP; honored by load_binop_operands + gen_add/sub/cmp. Only the
+       experimental IR_LRA_DEPACK path sets this (the default-on LRA never does). */
+    uint8_t     lra_stage_src1_bc;
+
     /* Source location for debug / -gcline output. */
     const char *file;
     int         line;
@@ -533,12 +605,40 @@ typedef struct {
        `push <idx>;pop de`. */
     int        idx2_reg;
 
+    /* Second spare index register (IY) for a loop-carried word resident in
+       true sp-mode (idx2_reg == IX, IY free), or IR_PR_NONE. Stamped by
+       ir_build from ir_idx3_reg(). Read/written via index halves; the lowerer
+       treats it as a second idx2-style home and push/pop's IY in the prologue
+       (IY callee-saved). */
+    int        idx3_reg;
+
+    /* exx/alt-bank home for a loop-INVARIANT word (IR_PR_BC_ALT), or
+       IR_PR_NONE. Stamped by ir_build from ir_exx_reg(). Read-only in-loop so it
+       persists across `exx`; the compare bridges through A. Frees an index
+       register for a writable loop var (the exx co-design). sp-mode, z80/z80n. */
+    int        exx_reg;
+
     /* Word (int) accumulator residency: the one width-2 vreg the allocator
        elected to keep in the DE pair across its loop (slot-backed lazy-spill,
        the word analog of the byte E-home), or -1. Distinguishes the resident
        home from ordinary single-def IR_PR_DE transients (both carry phys
        IR_PR_DE). Set by ir_alloc, read by ir_lower. */
     int        word_home_vreg;
+
+    /* DE-home co-design (opt-in IR_DE_HOME): set when word_home_vreg is a
+       GENERAL (non-reduction) loop-carried width-2 vreg (e.g. searchbench
+       `hi`) rather than a reduction accumulator. The lowerer keeps DE clean
+       across the region via the (ix+d) compare/ALU folds + a push/pop-de deref,
+       and commits a general home-def to DE. 0 = reduction accumulator (the
+       existing try_word_accumulate path). */
+    int        de_home_general;
+
+    /* Loop regalloc (opt-in IR_LOOP_RA): word_home_vreg is a walking BYTE
+       pointer homed in DE across its loop (Phase A first client). op_de_clean
+       treats deref/store/step THROUGH the home (ld a,(de)/ld (de),a/inc de) as
+       DE-clean; distinct from the word-accumulate semantics. Reverts to slot if
+       no DE-clean region forms. See LOOP_REGALLOC_PLAN.md. */
+    int        de_home_is_ptr;
 
     /* Function attributes — pulled from the symbol's ctype flags but
        hoisted here for the lowerer's convenience. */
@@ -668,6 +768,19 @@ const char *ir_op_name(OpKind kind);
 
 const char *ir_phys_name(PhysReg pr);
 
+/* LRA (ir_lower.c): the verified per-op value-register clobber model + a vreg's
+   physical-register mask. Shared with the allocator (ir_alloc.c) so the DE-local
+   pack proves clean spans against the SAME model IR_VERIFY checks. */
+RegMask op_clobbers(const Func *f, const Op *op);
+/* Like op_clobbers, but models the relaxed lowering of the ops with a `hl,bc`
+   alternate form (ADD/SUB and word compares): src[1] is staged into BC instead
+   of DE, so DE is dropped from the clobber set (unless DE is the op's result or
+   operand home) and BC is added. Wide (DEHL/i64) forms have no BC-only variant
+   and are returned unchanged. LRA Phase-4 step 1: the DE-clean-modulo-staging
+   model the DE-pack is measured against. */
+RegMask op_clobbers_relaxed(const Func *f, const Op *op);
+RegMask phys_regmask(const Func *f, int vreg);
+
 /* ----- Compiler-internal accessors ------------------------------------- */
 
 /* The lowerer needs C-level symbol names for asm labels, but ir.c
@@ -689,5 +802,7 @@ const SYMBOL *ir_namespace_bank_fn(const char *ns_name);
    for a loop-invariant resident: IR_PR_IY/IR_PR_IX, or IR_PR_NONE if
    disabled/unavailable. See ir_compiler_glue.c. */
 int ir_idx2_reg(void);
+int ir_idx3_reg(void);
+int ir_exx_reg(void);
 
 #endif /* IR_H */

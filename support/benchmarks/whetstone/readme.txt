@@ -131,8 +131,24 @@ This time can be plugged into the whetstone formulas above to compute
 exact KWIPS performance.
 
 
-RESULTS
-=======
+CLASSIC Z80 / 8085 SUMMARY
+==========================
+
+Timer-bounded classic +test (main z80/8085). Full RESULT blocks:
+z88dk-classic/readme.txt.
+
+Compiler | CPU  | Library | Ticks
+---------|------|---------|-------------
+sccz80   | z80  | mbf32   | 544_395_320   (Jul 2026)
+sccz80   | 8085 | mbf32   | 548_321_291   (Jul 2026)
+80cc     | z80  | mbf32   | 558_782_473   (Jul 2026)
+80cc     | 8085 | mbf32   | 561_486_320   (Jul 2026)
+sccz80   | z80  | genmath | 1_284_172_870
+80cc     | *    | math32  | SKIP — does not reach TIMER_STOP
+
+
+RESULTS (full multi-toolchain archive)
+======================================
 
 1.
 HITECH C CPM V309-15
@@ -234,26 +250,44 @@ KWIPS        = 100*10*1 / 142.0524 = 7.0396
 MWIPS        = 7.0396 / 1000 = 0.0070396
 
 10.
-Z88DK January 3, 2022
+Z88DK July 19, 2026
 sccz80 / classic c library / MBF32
 Microsoft 32-bit math 24 bit mantissa + 8 bit exponent
-6237 bytes less page zero
+6206 bytes less page zero
 
-cycle count  = 547041311
-time @ 4MHz  = 547041311 / 4x10^6 = 136.7603 seconds
-KWIPS        = 100*10*1 / 136.7603 = 7.3121
-MWIPS        = 7.3121 / 1000 = 0.0073121
+cycle count  = 544395320
+time @ 4MHz  = 544395320 / 4x10^6 = 136.0988 seconds
+KWIPS        = 100*10*1 / 136.0988 = 7.3476
+MWIPS        = 7.3476 / 1000 = 0.0073476
 
 11.
-Z88DK December 12, 2022
+Z88DK July 20, 2026
+80cc / classic c library / MBF32
+10122 bytes less page zero
+
+cycle count  = 558782473
+time @ 4MHz  = 558782473 / 4x10^6 = 139.6956 seconds
+KWIPS        = 100*10*1 / 139.6956 = 7.1584
+MWIPS        = 7.1584 / 1000 = 0.0071584
+
+Z88DK July 20, 2026
+80cc / classic c library / 8085 / MBF32
+9670 bytes less page zero
+
+cycle count  = 561486320
+time @ 4MHz  = 561486320 / 4x10^6 = 140.3716 seconds
+KWIPS        = 100*10*1 / 140.3716 = 7.1240
+MWIPS        = 7.1240 / 1000 = 0.0071240
+
+Z88DK July 19, 2026
 sccz80 / classic c library / 8085 CPU / MBF32
 Microsoft 32-bit math 24 bit mantissa + 8 bit exponent
-6078 bytes less page zero
+5959 bytes less page zero
 
-cycle count  = 549312725
-time @ 4MHz  = 549312725 / 4x10^6 = 137.3281 seconds
-KWIPS        = 100*10*1 / 137.3281 = 7.2818
-MWIPS        = 7.2818 / 1000 = 0.0072818
+cycle count  = 548321291
+time @ 4MHz  = 548321291 / 4x10^6 = 137.0803 seconds
+KWIPS        = 100*10*1 / 137.0803 = 7.2950
+MWIPS        = 7.2950 / 1000 = 0.0072950
 
 12.
 HITECH C MSDOS V780pl2

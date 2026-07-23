@@ -206,70 +206,16 @@ extern   int optreset;
 //
 // void *cmp == char (*cmp)(void *key, void *datum);
 
-extern void __LIB__  *l_bsearch(void *key, void *base, unsigned int n, void *cmp) __smallc;
-extern void __LIB__  *l_bsearch_callee(void *key, void *base, unsigned int n, void *cmp) __smallc __z88dk_callee;
-extern void __LIB__  l_qsort(void *base, unsigned int size, void *cmp) __smallc;
-extern void __LIB__  l_qsort_callee(void *base, unsigned int size, void *cmp) __smallc __z88dk_callee;
+// One shared search/sort core.  sccz80 links the bare names (__LIB__), sdcc the
+// _-prefixed ones; each entry embeds its own comparator thunk, so a single
+// classic library serves both compilers (see classic/stdlib/{qsort,bsearch}.asm).
+extern void __LIB__   qsort(void *base, unsigned int nmemb, unsigned int size, int (*compar)(const void *, const void *)) __smallc;
+extern void __LIB__  *bsearch(void *key, void *base, unsigned int nmemb, unsigned int size, int (*compar)(const void *, const void *)) __smallc;
 
-#define l_bsearch(a,b,c,d) l_bsearch_callee(a,b,c,d)
-
-extern void __LIB__  qsort_sccz80(void *base, unsigned int nel, unsigned int width, void *compar) __smallc;
-extern void __LIB__  qsort_sccz80_callee(void *base, unsigned int nel, unsigned int width, void *compar) __smallc __z88dk_callee;
-
-extern void __LIB__  qsort_sdcc(void *base, unsigned int nel, unsigned int width, void *compar) __smallc;
-extern void __LIB__  qsort_sdcc_callee(void *base, unsigned int nel, unsigned int width, void *compar) __smallc __z88dk_callee;
-
-#ifdef __Z88DK_R2L_CALLING_CONVENTION
-
-#define qsort                  qsort_sdcc
-#define qsort_sdcc(a,b,c,d)    qsort_sdcc_callee(a,b,c,d)
-
-#else
-
-#define qsort                  qsort_sccz80
-#define qsort_sccz80(a,b,c,d)  qsort_sccz80_callee(a,b,c,d)
-
-#endif
-
-#ifdef __clang__
-/* clang/llvmz80: qsort_sdcc_callee is a stack-passing (__smallc __z88dk_callee)
-   routine that invokes the comparator with sdcccall(0) semantics --
-   [SP+2]=a, [SP+4]=b, result read from HL (see qsort_sdcc_callee.asm).
-   Two SOURCE-LEVEL annotations make a clang program match it with NO runtime
-   bridge or trampoline (fully reentrant):
-
-     (1) The inline call-order swapper below reverses the four arguments so
-         clang's right-to-left push lands them exactly as qsort_sdcc_callee
-         expects: [SP+2]=compar, [SP+4]=width, [SP+6]=nel, [SP+8]=base.
-         (This is the __ZPROTO4 mechanism, applied by hand to keep the direct
-          call to qsort_sdcc_callee.)
-
-     (2) The user comparator MUST be declared __smallc (== sdcccall(0) for
-         clang) so clang compiles it to read a/b from the stack and return the
-         int result in HL -- precisely qsort_sdcc's callback protocol.  A
-         default (unannotated) comparator instead takes a in HL, b in DE and
-         returns in DE, which qsort_sdcc cannot invoke -> crash.
-         __smallc is a no-op for sccz80/sdcc, so an annotated comparator stays
-         source-portable across all three compilers.
-
-   Example:
-     __smallc int cmp(const void *a, const void *b)
-         { return *(const int *)a - *(const int *)b; }
-     qsort(arr, n, sizeof(int), cmp);        // just works, no bridge */
-__attribute__((always_inline))
-static inline void __qsort_llvmz80(void *base, unsigned int nel,
-                                   unsigned int width, void *compar) {
-    qsort_sdcc_callee(compar, width, nel, base);   /* reversed: see (1) above */
-}
-#undef qsort
-#define qsort(a,b,c,d) __qsort_llvmz80(a,b,c,d)
-#endif
-
-#ifdef __ZX81__
-#define l_qsort(a,b,c) qsort(a,b,2,c)
-#else
-#define l_qsort(a,b,c) l_qsort_callee(a,b,c)
-#endif
+// l_qsort()/l_bsearch() operate on arrays of 2-byte items (pointers/ints),
+// sharing the one core rather than a separate little implementation.
+#define l_qsort(a,b,c)     qsort(a,b,2,c)
+#define l_bsearch(a,b,c,d) bsearch(a,b,c,2,d)
 
 
 //////////////////////////

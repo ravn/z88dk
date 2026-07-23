@@ -23,11 +23,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 
 /* Global FRAMEPTR opt-in: -1 disabled, 1 IX, 0 IY. Owned by the
    compiler (data.c) but consulted directly here so the lowerer stays
    decoupled from ccdefs.h. */
 extern int c_framepointer_is_ix;
+extern int c_reserve_iy;   /* platform reserves IY — no IY residency */
+extern int c_reserve_ix;   /* platform reserves IX (sp-mode) — no IX residency */
+extern char c_debug_entry_points; /* -debug on a no-IX CPU: maintain a global
+                                     __debug_framepointer via l_debug_push_frame
+                                     so cdb frame offsets are walkable */
 
 /* Per-TU string-literal queue label number. String literal addresses
    emit as `ld hl,i_<litlab>+<offset>` (IR_LD_STR). */
@@ -96,10 +102,44 @@ typedef struct {
        slot reads add this to compensate. Reset per BB. Stack-consuming helpers
        (l_long_or/add) pop their RHS with no IR_POP — gen_hcall decrements it. */
     int cur_sp_adjust;
+    /* Stack-transient spill (IR_PR_STACK): the vreg whose value is currently
+       push-parked at TOS (via `push hl` at its def), or -1. Its single use pops
+       it. cur_sp_adjust is held +2 while it's parked so intervening sp-relative
+       slot accesses stay correct. Allocator guarantees these ranges are disjoint
+       within a BB (one parked at a time), so a single slot suffices. Reset per
+       BB alongside cur_sp_adjust. */
+    int cur_stack_resident;
+    /* cur_sp_adjust captured right after the park's `push hl`. The pop is valid
+       only while the parked word is still at TOS — cur_sp_adjust unchanged since
+       (nothing else pushed on top). stack_parked() checks this; on mismatch the
+       read falls through to require_slot (a loud abort, never a silent wrong
+       pop). */
+    int cur_stack_resident_spadj;
+    /* NO_SLOT byte emergency spill via AF (replaces the old below-sp `ld
+       (ix-(frame+1)),a` / sp-1 write). When a slotless byte in A must survive an
+       A-clobber (e.g. a store whose address load uses `ld a,(hl+)`), it is parked
+       with `push af` and reloaded with `pop af` — a real, interrupt-safe stack
+       slot. LIFO stack (nesting: a byte parked inside another's span). Each entry
+       records cur_sp_adjust at park so the pop only fires while still TOS. Reset
+       per BB. */
+    int af_park_vreg[4], af_park_spadj[4], af_park_depth;
     int func_emit_idx, cmp_label_counter, fc_ret_label_counter;
+    /* Phase-0 live-range measurement (IR_SPILL_STATS): a slot-traffic proxy
+       counted at the vemit chokepoint. spill_ix = fp frame-slot accesses
+       (`(ix`/`(iy` operands); spill_sp = sp-relative slot-address computations
+       (`add hl,sp`). Reset per function, reported at function-render end. Pure
+       measurement — no codegen effect; output stays byte-identical. */
+    int spill_ix, spill_sp;
     int cur_func_uses_params;
+    int cur_frameless;   /* fp-eligible but no IX frame (params read off sp) */
     int cur_home_is_word, cur_func_whome;
     int cur_byte_home_vreg, cur_byte_home_dirty, cur_func_ehome;
+    /* DE-home co-design: the general (non-accumulate) width-2 vreg the
+       orchestrator elected to keep in DE across a loop (e.g. searchbench `hi`),
+       or -1. Set by the orchestrator's residency decision; while it's live, the
+       binop/compare folds keep DE clean (read operands in place, no pair stage)
+       and the deref push/pop's DE, so the home survives the whole region. */
+    int cur_de_home;
     int cur_home_region_lo, cur_home_region_hi, cur_home_exit_flush_bb;
     int *bb_byte_out;
     /* Parallel to bb_byte_out: was the slot-backed byte home DIRTY (E holds
@@ -136,8 +176,10 @@ static LowerState L = {
     .rs = { .fa = -1, .i64_acc = -1 },
     .cur_hl_addr_off = -1, .cur_func_uses_params = 1,
     .cur_func_whome = -1, .cur_byte_home_vreg = -1, .cur_func_ehome = -1,
+    .cur_de_home = -1,
     .cur_home_region_lo = -1, .cur_home_region_hi = -1,
     .cur_home_exit_flush_bb = -1, .pending_spill_v = -1,
+    .cur_stack_resident = -1,
 };
 
 
@@ -229,8 +271,35 @@ typedef enum {
 static void apply_clobbers(Clobber c);
 static int wide_acc_result_dead_in_acc(const Func *f, int v);
 
+/* IR_SPILL_STATS (Phase-0 measurement): -1 = not yet probed, else 0/1. */
+static int spill_stats_on = -1;
+
+/* IR_VERIFY (LRA Phase-0): per-op capture of emitted instruction text so the
+   op_clobbers model can be cross-checked against what the emitter actually
+   writes. Inert (no codegen change); only active under IR_VERIFY. */
+static int  verify_on = -1;
+static char verify_buf[8192];
+static int  verify_len;
+
 static void vemit(FILE *out, const char *fmt, va_list ap)
 {
+    if (spill_stats_on < 0) spill_stats_on = getenv("IR_SPILL_STATS") ? 1 : 0;
+    if (verify_on < 0)      verify_on      = getenv("IR_VERIFY") ? 1 : 0;
+    if (spill_stats_on || verify_on) {
+        /* Fully-expanded instruction text. Buffer only when a probe is on; the
+           emitted bytes are unchanged. */
+        char buf[256];
+        va_list ap2; va_copy(ap2, ap);
+        vsnprintf(buf, sizeof buf, fmt, ap2);
+        va_end(ap2);
+        if (spill_stats_on) {
+            if (strstr(buf, "(ix") || strstr(buf, "(iy")) L.spill_ix++;
+            if (strstr(buf, "add\thl,sp")) L.spill_sp++;
+        }
+        if (verify_on && verify_len + (int)strlen(buf) + 2 < (int)sizeof verify_buf)
+            verify_len += snprintf(verify_buf + verify_len,
+                                   sizeof verify_buf - verify_len, "%s\n", buf);
+    }
     fputc('\t', out);
     vfprintf(out, fmt, ap);
     fputc('\n', out);
@@ -264,6 +333,130 @@ static void emit_c(FILE *out, Clobber c, const char *fmt, ...)
 static void emit_bb_label(FILE *out, int bb_id)
 {
     fprintf(out, "L_f%d_bb_%d:\n", L.func_emit_idx, bb_id);
+}
+
+/* Copy a rendered function from `rout` to `out`, dropping dead BB-label
+   definitions — an `L_fN_bb_M:` line no jump / defc / switch-table operand
+   names. Correct by construction (a label with zero textual references is
+   unreachable by name); also lets copt peepholes match across the former label
+   boundary. Only exact `L_f<d>_bb_<d>:` lines are candidates; other labels
+   (func entry `._name`, `_shl_loop_`, defc aliases) pass through untouched.
+   `max_bb` bounds the reference bitset. */
+/* Rewrite a `\tjp\t[cc,]L_f<idx>_bb_<n>` line's target number in place per thr[]
+   (jump threading). Only touches unconditional/conditional `jp` lines; the label
+   prefix `L_f<idx>_bb_` and any condition/comment are preserved. */
+static void thread_jp_line(FILE *out, const char *line, const int *thr, int max_bb)
+{
+    if (strncmp(line, "\tjp\t", 4) != 0) { fputs(line, out); return; }
+    char *p = strstr(line, "_bb_");
+    if (!p || p[4] < '0' || p[4] > '9') { fputs(line, out); return; }
+    int n = 0; const char *q = p + 4;
+    while (*q >= '0' && *q <= '9') n = n * 10 + (*q++ - '0');
+    if (n > max_bb || thr[n] < 0 || thr[n] == n) { fputs(line, out); return; }
+    fwrite(line, 1, (size_t)(p + 4 - line), out);   /* up to and incl `_bb_` */
+    fprintf(out, "%d", thr[n]);                      /* threaded target */
+    fputs(q, out);                                   /* rest (`:`... no — operand tail/comment) */
+}
+
+static void emit_dropping_dead_bb_labels(FILE *out, FILE *rout, int max_bb)
+{
+    char line[1024];
+    char *ref = (max_bb >= 0) ? calloc((size_t)max_bb + 1, 1) : NULL;
+    int *thr = (max_bb >= 0) ? malloc(((size_t)max_bb + 1) * sizeof(int)) : NULL;
+    if (!ref || !thr) {                          /* OOM: copy verbatim */
+        free(ref); free(thr);
+        rewind(rout);
+        while (fgets(line, sizeof line, rout)) fputs(line, out);
+        return;
+    }
+    for (int i = 0; i <= max_bb; i++) thr[i] = -1;
+    /* Pass 0: jump-threading map. A run of one or more bare labels
+       `L_f..._bb_<n>:` whose first following instruction is an UNCONDITIONAL
+       `jp L_f..._bb_<m>` (no `,`) are jp-only trampolines: thread every n->m.
+       Operand rewrite only — the trampoline body stays (its fall-through
+       predecessors still need it), so this is sound even when a label is reached
+       by fall-through (unlike a defc alias). No-op directive/blank/comment lines
+       between the labels and the `jp` are skipped (C_LINE markers etc.). */
+    rewind(rout);
+    int pend[64], npend = 0;
+    while (fgets(line, sizeof line, rout)) {
+        if (strncmp(line, "\tC_LINE", 7) == 0 || line[0] == '\n'
+            || line[0] == '\r' || line[0] == ';')
+            continue;
+        if (line[0] == 'L') {                     /* a bb label def? keep collecting */
+            char *p = strstr(line, "_bb_");
+            if (p && p[4] >= '0' && p[4] <= '9') {
+                int n = 0; char *q = p + 4;
+                while (*q >= '0' && *q <= '9') n = n * 10 + (*q++ - '0');
+                if (*q == ':' && (q[1] == '\n' || q[1] == '\0') && n <= max_bb
+                    && npend < 64)
+                    pend[npend++] = n;
+            }
+            continue;
+        }
+        /* first real instruction after the label run */
+        if (npend > 0 && strncmp(line, "\tjp\t", 4) == 0 && !strchr(line, ',')) {
+            char *p = strstr(line, "_bb_");
+            if (p && p[4] >= '0' && p[4] <= '9') {
+                int m = 0; char *q = p + 4;
+                while (*q >= '0' && *q <= '9') m = m * 10 + (*q++ - '0');
+                for (int k = 0; k < npend; k++) thr[pend[k]] = m;
+            }
+        }
+        npend = 0;
+    }
+    for (int i = 0; i <= max_bb; i++) {           /* resolve transitively */
+        int t = thr[i], hops = 0;
+        while (t >= 0 && t <= max_bb && thr[t] >= 0 && thr[t] != t
+               && hops <= max_bb) { t = thr[t]; hops++; }
+        if (hops > max_bb) thr[i] = -1;           /* cycle → don't thread */
+        else if (t >= 0) thr[i] = t;
+    }
+    /* Pass 1: mark every BB number that appears as a REFERENCE — using the
+       THREADED target for jp operands, since pass 2 rewrites them. */
+    rewind(rout);
+    while (fgets(line, sizeof line, rout)) {
+        int is_jp = (strncmp(line, "\tjp\t", 4) == 0);
+        for (char *p = strstr(line, "_bb_"); p; p = strstr(p, "_bb_")) {
+            char *q = p + 4;
+            if (*q < '0' || *q > '9') { p = q; continue; }
+            int n = 0;
+            while (*q >= '0' && *q <= '9') n = n * 10 + (*q++ - '0');
+            int own_def = (line[0] == 'L' && *q == ':' && p == strstr(line, "_bb_"));
+            if (!own_def && n <= max_bb) {
+                int tgt = (is_jp && thr[n] >= 0) ? thr[n] : n;
+                if (tgt <= max_bb) ref[tgt] = 1;
+            }
+            p = q;
+        }
+    }
+    /* Pass 2: emit, dropping `L_f<d>_bb_<n>:` lines whose n is unreferenced, and
+       DEFERRING `defc L_f..._bb_...` alias lines. The defc's are 0-byte symbol
+       definitions emitted inline at the alias BBs' layout slots; moving them out
+       of the instruction stream makes the real (defc-are-nothing) adjacency
+       visible to copt without changing the binary. */
+    rewind(rout);
+    while (fgets(line, sizeof line, rout)) {
+        if (strncmp(line, "defc L_f", 8) == 0) continue;   /* defer to pass 3 */
+        if (line[0] == 'L') {
+            char *p = strstr(line, "_bb_");
+            if (p) {
+                char *q = p + 4;
+                int has = (*q >= '0' && *q <= '9'), n = 0;
+                while (*q >= '0' && *q <= '9') n = n * 10 + (*q++ - '0');
+                if (has && *q == ':' && (q[1] == '\n' || q[1] == '\0')
+                    && (n > max_bb || !ref[n]))
+                    continue;                    /* drop dead label */
+            }
+        }
+        thread_jp_line(out, line, thr, max_bb);  /* rewrites jp targets; else fputs */
+    }
+    /* Pass 3: the deferred alias defc's, at the end of the function. */
+    rewind(rout);
+    while (fgets(line, sizeof line, rout))
+        if (strncmp(line, "defc L_f", 8) == 0) fputs(line, out);
+    free(ref);
+    free(thr);
 }
 
 /* HL value cache. Reset at each BB boundary and at any op that
@@ -345,18 +538,83 @@ static int frame_has_saved_fp(const Func *f)
     if (!f) return 0;
     if (c_framepointer_is_ix == -1) return 0;
     if (f->is_naked) return 0;
+    /* Frameless (Tier-B): fp-eligible but no IX — params are read off sp at
+       entry into their register homes, so no saved IX and caller-arg offsets
+       shift down by 2 (param_caller_off keys on this). */
+    if (L.cur_frameless) return 0;
     if (f->frame_size == 0 && !f->uses_acc && !f->is_interrupt
         && fastcall_arg_vreg(f) < 0 && !L.cur_func_uses_params)
         return 0;            /* no frame needed → no IX */
     return 1;
 }
 
+/* True iff entry maintains the software frame pointer for -debug on a CPU with
+   no IX (8080/8085/gbz80). `call l_debug_push_frame` saves the caller's
+   __debug_framepointer on the stack (2 bytes, between the locals and the return
+   address — same slot a saved IX would occupy) and points __debug_framepointer
+   at that save, so the debugger can walk frames and resolve `,B,1,d` cdb records.
+   The body still addresses locals/params via sp; this save is purely for the
+   debugger. Excludes naked (no frame) and interrupt (its push-all frames it). */
+static int frame_has_debug_fp(const Func *f)
+{
+    if (!f) return 0;
+    if (c_framepointer_is_ix != -1) return 0;   /* real IX frame handles it */
+    if (!c_debug_entry_points) return 0;
+    if (f->is_naked || f->is_interrupt) return 0;
+    return 1;
+}
+
+/* True iff entry saved IY for an idx3 (second-index) residency home. IY is
+   callee-saved, so a function parking a loop-carried word there push/pop's it
+   in the prologue/epilogue; the saved IY sits between the locals and the return
+   address (like the frame-pointer save), shifting caller-arg offsets up by 2.
+   sp-mode only (idx3_reg == IY); interrupts save IY via their own push-all. */
+static int frame_has_saved_iy(const Func *f)
+{
+    if (!f || f->is_naked || f->is_interrupt) return 0;
+    if (f->idx3_reg == IR_PR_NONE || !f->vreg_to_phys) return 0;
+    for (int i = 0; i < f->n_vregs; i++)
+        if (f->vreg_to_phys[i] == f->idx3_reg) return 1;
+    return 0;
+}
+
 static int fp_active(const Func *f)
 {
-    if (!frame_has_saved_fp(f)) return 0;
     /* Wide-accumulator functions can't keep their frame pointer in IX: the
        acc helpers clobber it. They save/restore IX but address sp-relative. */
     if (f->uses_acc) return 0;
+    /* Frameless keeps the fp-mode residency codegen (register homes, DE-clean
+       loops) — only the IX frame itself is gone; the few frame accesses (entry
+       param reads) route to sp via the !cur_frameless gates at those sites. */
+    if (L.cur_frameless) return 1;
+    if (!frame_has_saved_fp(f)) return 0;
+    return 1;
+}
+
+/* Frameless (Tier-B) eligibility: an fp-eligible function that needs NO frame
+   in its body — frame_size==0 (no locals/spills) and every parameter is
+   register-homed in BC/DE (read once at entry off sp, never from a slot in the
+   body). Then the IX setup/teardown is pure overhead vs sdcc, so skip it. Wide-
+   acc / interrupt / naked / fastcall / sdcccall1 / idx3-saved functions are
+   excluded (special framing or register-arg entry). Opt-in IR_FRAMELESS. */
+static int fastcall_arg_vreg(const Func *f);
+static int frame_has_saved_iy(const Func *f);
+static int frameless_ok(const Func *f)
+{
+    if (opt_disabled("frameless")) return 0;
+    if (c_framepointer_is_ix == -1) return 0;    /* sp-mode is already frameless */
+    if (f->is_naked || f->is_interrupt || f->uses_acc) return 0;
+    if (f->frame_size != 0) return 0;
+    if (fastcall_arg_vreg(f) >= 0) return 0;
+    if (f->flags & SDCCCALL1) return 0;
+    if (frame_has_saved_iy(f)) return 0;
+    if (!f->vreg_to_phys) return 0;
+    for (int v = 0; v < f->n_vregs; v++) {
+        const VReg *vr = &f->vregs[v];
+        if (!(vr->flags & (IR_VREG_PARAM | IR_VREG_PARAM_IN_PLACE))) continue;
+        int ph = f->vreg_to_phys[v];
+        if (ph != IR_PR_BC && ph != IR_PR_DE) return 0;  /* handled homes only */
+    }
     return 1;
 }
 
@@ -394,6 +652,8 @@ static int param_caller_off(const Func *f, int vreg_id)
        make room for the saved IX. So caller_off becomes
        frame_size + 4 + args_total instead of frame_size + 2 + args_total. */
     int retaddr_off = f->frame_size + (frame_has_saved_fp(f) ? 4 : 2)
+                    + (frame_has_debug_fp(f) ? 2 : 0)   /* l_debug_push_frame save */
+                    + (frame_has_saved_iy(f) ? 2 : 0)   /* saved IY (idx3) */
                     + (f->returns_longlong ? 2 : 0)
                     /* interrupt push-all (12) / critical l_push_di (2) sit
                        between the locals and the return address. Rabbit's
@@ -487,6 +747,9 @@ static PhysReg byte_home_phys(const Func *f, int v);
 static int  byte_home_slotbacked(PhysReg pr);
 static const char *byte_home_reg(PhysReg pr);
 static int  byte_home_holds(int v);
+static int  vreg_is_pr_de(const Func *f, int v);
+static PhysReg idxhalf_phys(const Func *f, int v);
+static const char *idxhalf_reg(PhysReg pr);
 static void byte_home_note(int v);
 static void byte_home_flush(FILE *out, const Func *f);
 /* Word (int) DE-home — width-aware siblings of the byte-home helpers; the
@@ -499,6 +762,9 @@ static void home_flush(FILE *out, const Func *f);
 static void home_clobber(FILE *out, const Func *f);
 static int  home_rehome(FILE *out, const Func *f);
 static int  home_is_slotbacked(const Func *f, int v);
+static const Op *find_unique_def(const Func *f, int v);
+static const Op *find_unique_use(const Func *f, int v);
+static int  de_home_indexed_add_ok(const Func *f, const Op *o);
 static void cache_de(int v);
 static void cache_bc(int v);
 static void cache_dehl(int v);
@@ -507,7 +773,12 @@ static void invalidate_de_cache(void);
 static void invalidate_hl_keep_de(void);
 static void invalidate_hl_keep_a(void);
 static int  vreg_in_idx2(const Func *f, int v);
-static const char *idx2_reg_name(const Func *f);
+static int  vreg_idx_home(const Func *f, int v);
+static const char *vreg_idx_name(const Func *f, int v);
+static int  vreg_in_exx(const Func *f, int v);
+static const char *exx_half_lo(const Func *f);
+static const char *exx_half_hi(const Func *f);
+static const char *exx_pair(const Func *f);
 static void cache_hl_slot_addr(const Func *f, int v);
 static void emit_byte_slot_addr(FILE *out, const Func *f, int v);
 
@@ -718,6 +989,405 @@ static void store_byte_adv(FILE *out, const char *reg, int last)
 #include "ir_lower_ops.inc.c"
 #include "ir_lower_call.inc.c"
 #include "ir_lower_cmp.inc.c"
+
+/* ===== LRA Phase 0: op_clobbers model + IR_VERIFY cross-check =============
+   Read-only classification of which physical value-registers an op's lowering
+   writes, plus a verifier that parses the emitted asm and asserts the actual
+   writes are a subset of the model. Inert (IR_VERIFY only); the substrate the
+   live-range allocator's soundness rests on (a value in register r survives an
+   op iff r is NOT in op_clobbers(op)). */
+
+/* A register-name token (as emitted, lowercase) → value-register mask. */
+static RegMask lra_reg_of(const char *t)
+{
+    if (!t[0]) return 0;
+    if (t[0] == '(') return IR_R_MEM;                 /* (hl) (de) (nn) (ix+d) */
+    if (!strcmp(t,"a"))  return IR_R_A;
+    if (!strcmp(t,"f")||!strcmp(t,"af")) return IR_R_F | (t[1]=='f'?IR_R_A:0);
+    if (!strcmp(t,"h")||!strcmp(t,"l")||!strcmp(t,"hl")) return IR_R_HL;
+    if (!strcmp(t,"d")||!strcmp(t,"e")||!strcmp(t,"de")) return IR_R_DE;
+    if (!strcmp(t,"b")||!strcmp(t,"c")||!strcmp(t,"bc")) return IR_R_BC;
+    if (!strncmp(t,"ix",2)) return IR_R_IX;           /* ix ixl ixh */
+    if (!strncmp(t,"iy",2)) return IR_R_IY;
+    if (!strcmp(t,"sp")) return IR_R_SP;
+    return 0;                                         /* immediate / label / cc */
+}
+
+/* One emitted instruction line → the value-registers it WRITES. Sets *unknown
+   if the mnemonic isn't modelled (so the verifier can report it rather than
+   silently trust). */
+static RegMask lra_line_writes(const char *line, int *unknown)
+{
+    char m[16] = {0}, o0[64] = {0}, o1[64] = {0};
+    const char *p = line;
+    int i = 0;
+    while (*p && *p != ' ' && *p != '\t' && i < 15) m[i++] = *p++;
+    while (*p == ' ' || *p == '\t') p++;
+    /* operands: split on first comma */
+    const char *comma = strchr(p, ',');
+    if (comma) {
+        int n = (int)(comma - p); if (n > 63) n = 63;
+        memcpy(o0, p, (size_t)n);
+        const char *q = comma + 1; while (*q == ' ') q++;
+        i = 0; while (*q && *q!='\n' && *q!=';' && i < 63) o1[i++] = *q++;
+    } else {
+        i = 0; while (*p && *p!='\n' && *p!=';' && i < 63) o0[i++] = *p++;
+    }
+    RegMask w = 0;
+    /* gbz80 auto-step pointer forms: ld a,(hl+) / ld (hl-),a step HL */
+    if (strstr(line,"hl+")||strstr(line,"hl-")) w |= IR_R_HL;
+    if (strstr(line,"de+")||strstr(line,"de-")) w |= IR_R_DE;
+
+    if (!strcmp(m,"ld"))                                 w |= lra_reg_of(o0);
+    else if (!strcmp(m,"add")||!strcmp(m,"adc")||!strcmp(m,"sbc"))
+                                                         w |= lra_reg_of(o0)|IR_R_F;
+    else if (!strcmp(m,"sub")||!strcmp(m,"and")||!strcmp(m,"or")||!strcmp(m,"xor"))
+                                                         w |= IR_R_A|IR_R_F;
+    else if (!strcmp(m,"cp"))                            w |= IR_R_F;
+    else if (!strcmp(m,"inc")||!strcmp(m,"dec"))         w |= lra_reg_of(o0)|IR_R_F;
+    else if (!strcmp(m,"sla")||!strcmp(m,"sra")||!strcmp(m,"srl")||!strcmp(m,"rl")
+          || !strcmp(m,"rr")||!strcmp(m,"rlc")||!strcmp(m,"rrc")||!strcmp(m,"swap"))
+                                                         w |= lra_reg_of(o0)|IR_R_F;
+    else if (!strcmp(m,"rlca")||!strcmp(m,"rrca")||!strcmp(m,"rla")||!strcmp(m,"rra"))
+                                                         w |= IR_R_A|IR_R_F;
+    else if (!strcmp(m,"neg")||!strcmp(m,"cpl"))         w |= IR_R_A|IR_R_F;
+    else if (!strcmp(m,"bit")||!strcmp(m,"set")||!strcmp(m,"res")) w |= (m[0]=='b'?IR_R_F:lra_reg_of(o1));
+    else if (!strcmp(m,"ex"))                            w |= lra_reg_of(o0)|lra_reg_of(o1);
+    else if (!strcmp(m,"exx"))                           w |= IR_R_HL|IR_R_DE|IR_R_BC;
+    else if (!strcmp(m,"push"))                          w |= IR_R_SP|IR_R_MEM;
+    else if (!strcmp(m,"pop"))                           w |= lra_reg_of(o0)|IR_R_SP;
+    else if (!strcmp(m,"call")||!strcmp(m,"rst")) {
+        /* The shift helpers (l_asr/l_lsr/l_lsl + _u / _dehl) are BC-clean by
+           contract (see gen_shr) — don't attribute BC to them, else a 16-bit
+           shift would spuriously look like it clobbers a BC resident. */
+        int bc_clean = (strstr(o0,"l_asr")||strstr(o0,"l_lsr")||strstr(o0,"l_lsl"));
+        w |= IR_R_A|IR_R_HL|IR_R_DE|IR_R_F|IR_R_MEM | (bc_clean ? 0 : IR_R_BC);
+    }
+    else if (!strcmp(m,"djnz"))                          w |= IR_R_BC|IR_R_F;
+    else if (!strcmp(m,"mlt"))                           w |= lra_reg_of(o0);              /* z180 */
+    else if (!strcmp(m,"mul")||!strcmp(m,"muls"))        w |= lra_reg_of(o0)|IR_R_F;        /* z80n/kc160 */
+    else if (!strcmp(m,"div")||!strcmp(m,"divu")||!strcmp(m,"divs"))
+                                                         w |= lra_reg_of(o0)|IR_R_A|IR_R_F; /* kc160 */
+    else if (!strcmp(m,"ldi")||!strcmp(m,"ldd")||!strcmp(m,"ldir")||!strcmp(m,"lddr"))
+                                                         w |= IR_R_HL|IR_R_DE|IR_R_BC|IR_R_MEM|IR_R_F;
+    else if (!strcmp(m,"scf")||!strcmp(m,"ccf"))         w |= IR_R_F;
+    else if (!strcmp(m,"ret")||!strcmp(m,"jp")||!strcmp(m,"jr")||!strcmp(m,"nop")
+          || !strcmp(m,"di")||!strcmp(m,"ei")||!strcmp(m,"halt")||!strcmp(m,"reti")
+          || !strcmp(m,"retn")) { /* control/none */ }
+    else if (m[0])                                       *unknown = 1;
+    return w;
+}
+
+/* A vreg's physical register as a mask (its result-home). Byte halves map to
+   their pair; SPILL/none → 0 (the value's home is memory, written via HL/MEM). */
+RegMask phys_regmask(const Func *f, int v)
+{
+    if (v < 0 || !f->vreg_to_phys) return 0;
+    switch (f->vreg_to_phys[v]) {
+    case IR_PR_A:                 return IR_R_A;
+    case IR_PR_HL:                return IR_R_HL;
+    case IR_PR_DE: case IR_PR_E: case IR_PR_D: return IR_R_DE;
+    case IR_PR_BC: case IR_PR_C: case IR_PR_B: return IR_R_BC;
+    case IR_PR_DEHL:              return IR_R_HL|IR_R_DE;
+    case IR_PR_IX: case IR_PR_IXL: case IR_PR_IXH: return IR_R_IX;
+    case IR_PR_IY: case IR_PR_IYL: case IR_PR_IYH: return IR_R_IY;
+    default:                      return 0;
+    }
+}
+
+/* Helper clobber table (PRESERVE_REGS Track B). Names here are the `l_` runtime
+   helpers AUDITED (grep of libsrc/l + libsrc/math asm) to use neither IX/IY nor
+   the alt/shadow bank (exx) — so a value homed in IX/IY/BC'/DE'/HL' survives the
+   call. CONSERVATIVE by construction: an unknown or unaudited helper is NOT
+   listed and falls through to IR_R_ALL, so a mis-omission costs residency, never
+   correctness. A mis-INCLUSION would be a silent miscompile, so only add a name
+   after confirming its asm (all CPU variants) is index+alt clean. Long/i64/float/
+   far/fnptr helpers (l_long_*, l_i64_*, l_f*, lp_*, l_setix/iy, l_jpix/iy) DO use
+   the index regs and must never be listed. */
+static int helper_preserves_index_alt(const char *name)
+{
+    static const char *const clean[] = {
+        /* multiplies (16x16, narrowing 16x16->32) */
+        "l_mult", "l_mult_u", "l_mulu_32_16x16",
+        /* divides / modulo (16-bit) */
+        "l_div", "l_div_u",
+        /* shifts (BC-clean-by-contract shift family; asr verified, lsr/lsl same) */
+        "l_asr", "l_lsr", "l_lsl",
+        /* unary */
+        "l_neg", "l_abs",
+    };
+    for (size_t i = 0; i < sizeof clean / sizeof clean[0]; i++)
+        if (!strcmp(name, clean[i])) return 1;
+    return 0;
+}
+
+/* The model: registers op's lowering may clobber (value regs only; SP/MEM are
+   stack/memory bookkeeping, checked separately). First cut — refined against
+   the IR_VERIFY log. Under-approx is caught by the verifier; over-approx is
+   sound but costs residency. */
+RegMask op_clobbers(const Func *f, const Op *op)
+{
+    int dw = (op->dst >= 0 && op->dst < f->n_vregs) ? f->vregs[op->dst].width : 0;
+    /* Width of the WIDEST operand, not just the dst: a 32-bit compare/store has
+       a width-2 (bool) dst but width-4 operands, and its lowering uses the DEHL
+       helpers + BC (and cleans a pushed long via `pop bc`). */
+    int ow = dw;
+    for (int s = 0; s < 2; s++)
+        if (op->src[s] >= 0 && op->src[s] < f->n_vregs
+            && f->vregs[op->src[s]].width > ow) ow = f->vregs[op->src[s]].width;
+    RegMask wide = (ow >= 4) ? (IR_R_HL|IR_R_DE|IR_R_BC) : 0;   /* DEHL/i64 helpers use BC */
+    RegMask dst  = phys_regmask(f, op->dst);                    /* result home */
+    /* An operand's register can itself be written: an aliased two-address ALU
+       (dst=src0) and — crucially — a `*p++` deref that steps its pointer
+       operand (`inc bc` when p is BC-homed). Folding operand homes in keeps the
+       model precise there without blanket-pessimising BC on plain loads. */
+    RegMask ops = phys_regmask(f, op->src[0]) | phys_regmask(f, op->src[1])
+                | (op->mem.kind == IR_MEM_VREG ? phys_regmask(f, op->mem.base) : 0);
+    switch (op->kind) {
+    case IR_NOP: case IR_BR: case IR_PHI:
+        return 0;
+    case IR_HCALL:
+        /* Helper clobber table (PRESERVE_REGS Track B): the audited integer
+           word/byte arithmetic helpers touch neither the index registers nor
+           the alt bank (verified against libsrc/l asm), so they PRESERVE IX/IY/
+           BC'/DE'/HL' — only the main bank + flags + memory are clobbered. That
+           lets an IX/IY/alt-bank home survive the call. Unknown/long/float/i64/
+           far helpers stay conservative (IR_R_ALL). */
+        if (op->hcall && op->hcall->name && helper_preserves_index_alt(op->hcall->name))
+            return IR_R_HL | IR_R_DE | IR_R_BC | IR_R_A | IR_R_F | IR_R_MEM;
+        return IR_R_ALL;
+    case IR_CALL: case IR_ASM: case IR_PUSH_ARG:
+    case IR_PUSH_STRUCT: case IR_SWITCH: case IR_RET: case IR_MEMSET:
+    case IR_MEMCPY: case IR_ACC_UNOP: case IR_ACC_BINOP: case IR_ACC_CMP:
+        return IR_R_ALL;               /* opaque: helper call / whole-reg-set */
+    case IR_MUL:
+        return IR_R_HL|IR_R_DE|IR_R_BC|IR_R_A|IR_R_F;
+    case IR_SHL: case IR_SHR:
+        /* z80n stages the shift count into B for `bsrl/bsra de,b`. */
+        return IR_R_HL|IR_R_DE|IR_R_A|IR_R_F|wide|dst|ops
+             | (IS_Z80N() ? IR_R_BC : 0);
+    case IR_CMP_EQ: case IR_CMP_NE:
+    case IR_CMP_LT: case IR_CMP_LE: case IR_CMP_GT: case IR_CMP_GE:
+    case IR_CMP_ULT: case IR_CMP_ULE: case IR_CMP_UGT: case IR_CMP_UGE:
+        /* 8085 word compares stage an operand into BC (`ld c,e; ld b,d`). */
+        return IR_R_HL|IR_R_DE|IR_R_A|IR_R_F|wide|dst|ops
+             | (IS_8085() ? IR_R_BC : 0);
+    default:
+        /* Everything else — loads/materialise/MOV/ALU/compare/conv/shift/store:
+           HL workhorse + A scratch + DE (operand staging / `ex de,hl` word
+           commit) + flags + result home + operand homes; wide (DEHL) uses BC. */
+        return IR_R_HL|IR_R_DE|IR_R_A|IR_R_F|wide|dst|ops;
+    }
+}
+
+/* The relaxed model (LRA Phase-4 step 1). ADD/SUB and the word compares stage
+   src[1] into DE today purely so a `add hl,de`/`sbc hl,de` can fire; the same
+   op has a `add hl,bc`/`sbc hl,bc` form that stages into BC instead, leaving DE
+   untouched. Model that alternate: drop the staging-DE bit and add BC. DE is
+   kept if the op still needs it as its result home or an operand home (a value
+   already resident in DE), and the whole relaxation is skipped for wide
+   (width>=4) ops, whose DEHL/i64 helpers have no BC-only form. */
+RegMask op_clobbers_relaxed(const Func *f, const Op *op)
+{
+    RegMask m = op_clobbers(f, op);
+    int has_bc_form = (op->kind == IR_ADD || op->kind == IR_SUB
+        || (op->kind >= IR_CMP_EQ && op->kind <= IR_CMP_UGE));
+    if (!has_bc_form) return m;
+    /* Widest operand/dst width — the DEHL helpers (>=4) genuinely need DE. */
+    int ow = (op->dst >= 0 && op->dst < f->n_vregs) ? f->vregs[op->dst].width : 0;
+    for (int s = 0; s < 2; s++)
+        if (op->src[s] >= 0 && op->src[s] < f->n_vregs
+            && f->vregs[op->src[s]].width > ow) ow = f->vregs[op->src[s]].width;
+    if (ow >= 4) return m;
+    /* DE required independently of staging: result home or an operand home. */
+    RegMask need_de = (phys_regmask(f, op->dst)
+        | phys_regmask(f, op->src[0]) | phys_regmask(f, op->src[1])
+        | (op->mem.kind == IR_MEM_VREG ? phys_regmask(f, op->mem.base) : 0))
+        & IR_R_DE;
+    if (!need_de) m &= ~IR_R_DE;   /* staging routed off DE */
+    m |= IR_R_BC;                  /* ...and into BC (the `hl,bc` form) */
+    return m;
+}
+
+/* Cross-check the just-lowered op's emitted instructions against op_clobbers.
+   Logs (does not abort) so a full corpus run reveals every model gap. */
+static void ir_verify_op(const Func *f, const Op *op, const char *buf)
+{
+    RegMask actual = 0, pushed = 0; int unknown = 0;
+    char line[256]; const char *p = buf;
+    while (*p) {
+        int i = 0; while (*p && *p != '\n' && i < 255) line[i++] = *p++;
+        line[i] = 0; if (*p == '\n') p++;
+        if (!line[0]) continue;
+        /* A push R / pop R pair PRESERVES R (net not clobbered), even if R is
+           used as scratch in between: record what's saved, and on a matching
+           pop clear that reg from the accumulated writes. */
+        if (!strncmp(line, "push", 4)) {
+            RegMask r = lra_reg_of(line + 5);
+            pushed |= r;
+        } else if (!strncmp(line, "pop", 3)) {
+            RegMask r = lra_reg_of(line + 4);
+            if (pushed & r) { actual &= ~r; pushed &= ~r; continue; }  /* restore */
+        }
+        actual |= lra_line_writes(line, &unknown);
+    }
+    RegMask model = op_clobbers(f, op);
+    /* SP (stack-spill push/pop, ret) and MEM are stack/memory bookkeeping, not
+       value-register residency — not part of the clobber soundness check. */
+    RegMask leak = actual & ~model & ~IR_R_MEM & ~IR_R_SP;
+    if (leak) {
+        fprintf(stderr, "IR_VERIFY: %s writes %#x not in clobbers %#x | asm:",
+                ir_op_name(op->kind), (unsigned)leak, (unsigned)model);
+        const char *q = buf; char ln[256];
+        while (*q) { int k=0; while (*q && *q!='\n' && k<255) ln[k++]=*q++; ln[k]=0; if(*q=='\n')q++;
+            int u2=0; if (ln[0] && (lra_line_writes(ln,&u2) & leak)) fprintf(stderr, " [%s]", ln); }
+        fprintf(stderr, "\n");
+    }
+    if (unknown)
+        fprintf(stderr, "IR_VERIFY: %s emitted an unmodelled mnemonic\n",
+                ir_op_name(op->kind));
+}
+
+/* LRA Phase-1 opportunity probe (IR_LRA_PROBE): for each single-BB, call-free,
+   slot-resident word temp, does BC / DE stay op_clobbers-CLEAN across its span?
+   That is exactly "could a local allocator keep it in that register." Measures
+   the Phase-1 prize with the verified clobber model before building the pass. */
+static void lra_phase1_probe(const Func *f)
+{
+    if (!getenv("IR_LRA_PROBE")) return;
+    int elig = 0, bc_clean = 0, de_clean = 0, either = 0;
+    for (int v = 0; v < f->n_vregs; v++) {
+        if (f->vregs[v].width != 2) continue;
+        if (f->vreg_to_phys && f->vreg_to_phys[v] != IR_PR_SPILL) continue;
+        if (f->vregs[v].flags & (IR_VREG_PARAM|IR_VREG_ADDR_TAKEN|IR_VREG_VOLATILE))
+            continue;
+        int bb = -1, lo = 1<<30, hi = -1, multi = 0, firstdef = 0;
+        for (int i = 0; i < f->n_bbs && !multi; i++) {
+            const BB *b = &f->bbs[i];
+            for (int j = 0; j < b->n_ops; j++) {
+                const Op *o = &b->ops[j];
+                int isdef = (o->dst == v), isuse = 0, u[16];
+                int nu = ir_op_uses(o, u, 16);
+                for (int k = 0; k < nu; k++) if (u[k] == v) { isuse = 1; break; }
+                if (!isdef && !isuse) continue;
+                if (bb < 0) { bb = i; firstdef = isdef; }
+                else if (bb != i) { multi = 1; break; }
+                if (j < lo) lo = j;
+                if (j > hi) hi = j;
+            }
+        }
+        if (multi || bb < 0 || hi < 0 || !firstdef) continue;
+        const BB *b = &f->bbs[bb];
+        int callfree = 1;
+        for (int j = lo; j <= hi; j++) {
+            OpKind k = b->ops[j].kind;
+            if (k == IR_CALL || k == IR_HCALL || k == IR_ASM) { callfree = 0; break; }
+        }
+        if (!callfree) continue;
+        elig++;
+        int bcc = 1, dec = 1;
+        for (int j = lo + 1; j <= hi; j++) {
+            RegMask c = op_clobbers(f, &b->ops[j]);
+            if (c & IR_R_BC) bcc = 0;
+            if (c & IR_R_DE) dec = 0;
+        }
+        bc_clean += bcc; de_clean += dec; either += (bcc || dec);
+    }
+    if (elig)
+        fprintf(stderr, "LRA_P1: eligible=%d bc_clean=%d de_clean=%d either=%d\n",
+                elig, bc_clean, de_clean, either);
+}
+
+/* Phase-2a prize probe (IR_SPLIT_PROBE, inert). Runs AFTER ir_alloc (phys known)
+   and ir_compute_live_ranges (liveness known). Per function, over innermost loop
+   bodies, reports: max simultaneous live width-2 vregs (register PRESSURE), the
+   count of SPILLED width-2 vregs live in a loop, and how many of those an IY home
+   would CAPTURE (range op_clobbers-IY-clean — no CALL/HCALL/ASM = IR_R_ALL — and
+   IY otherwise free). Quantifies the splitting-allocator + IY prize before the
+   emitter/allocator get built. Read-only; no codegen change (byte-identical). */
+static void lra_split_probe(const Func *f)
+{
+    static int fidx = 0;
+    int myidx = fidx++;
+    if (!getenv("IR_SPLIT_PROBE")) return;
+    if (f->n_bbs <= 0 || f->n_vregs <= 0) return;
+
+    int total = 0;
+    for (int b = 0; b < f->n_bbs; b++) total += f->bbs[b].n_ops;
+    if (total <= 0) return;
+
+    /* Loop membership (id-range back-edge approximation — f->bbs[].loop_depth is
+       never populated; exact natural-loop nesting is overkill for a probe): for
+       each back-edge p->h (successor h with id <= p), mark [h..p] as in-loop. */
+    int *bb_loop = calloc((size_t)f->n_bbs, sizeof *bb_loop);
+    if (!bb_loop) return;
+    for (int p = 0; p < f->n_bbs; p++) {
+        int ns = ir_bb_n_succ(&f->bbs[p]);
+        for (int s = 0; s < ns; s++) {
+            int h = ir_bb_succ_at(&f->bbs[p], s);
+            if (h < 0 || h > p) continue;                 /* not a back-edge */
+            for (int b = h; b <= p; b++) bb_loop[b] = 1;
+        }
+    }
+
+    const Op **flat = calloc((size_t)total, sizeof *flat);
+    int *in_loop = calloc((size_t)total, sizeof *in_loop);
+    if (!flat || !in_loop) { free(flat); free(in_loop); free(bb_loop); return; }
+    int gi = 0, any_loop = 0;
+    for (int b = 0; b < f->n_bbs; b++) {
+        any_loop |= bb_loop[b];
+        for (int j = 0; j < f->bbs[b].n_ops; j++, gi++) {
+            flat[gi] = &f->bbs[b].ops[j];
+            in_loop[gi] = bb_loop[b];
+        }
+    }
+    if (!any_loop) { free(flat); free(in_loop); free(bb_loop); return; }
+
+    /* Register pressure: max over loop-body ops of |live width-2 vregs|. */
+    int pressure = 0;
+    for (int b = 0; b < f->n_bbs; b++) {
+        BB *bb = &f->bbs[b];
+        if (!bb_loop[b] || !bb->live_in_per_op) continue;
+        for (int k = 0; k < bb->n_ops; k++) {
+            const BitSet *ls = (const BitSet *)bb->live_in_per_op[k];
+            if (!ls) continue;
+            int cnt = 0;
+            for (int v = 0; v < f->n_vregs; v++)
+                if (f->vregs[v].width == 2 && ir_bitset_get(ls, v)) cnt++;
+            if (cnt > pressure) pressure = cnt;
+        }
+    }
+
+    int spilled = 0, iy_cap = 0;
+    for (int v = 0; v < f->n_vregs; v++) {
+        if (f->vregs[v].width != 2) continue;
+        if (f->vreg_to_phys && f->vreg_to_phys[v] != IR_PR_SPILL) continue;
+        const LiveRange *lr = ir_live_range(f, v);
+        if (!lr || lr->start < 0) continue;
+        int loopy = 0;
+        for (int k = lr->start; k <= lr->end && k < total; k++)
+            if (in_loop[k]) { loopy = 1; break; }
+        if (!loopy) continue;
+        spilled++;
+        int iy_clean = 1;
+        for (int k = lr->start; k <= lr->end && k < total; k++)
+            if (op_clobbers(f, flat[k]) & IR_R_IY) { iy_clean = 0; break; }
+        int iy_free = 1;
+        for (int u = 0; u < f->n_vregs && iy_free; u++) {
+            PhysReg pu = f->vreg_to_phys ? f->vreg_to_phys[u] : IR_PR_NONE;
+            if (pu != IR_PR_IY && pu != IR_PR_IYL && pu != IR_PR_IYH) continue;
+            if (ir_live_ranges_overlap(f, v, u)) iy_free = 0;
+        }
+        if (iy_clean && iy_free) iy_cap++;
+    }
+
+    if (spilled || pressure)
+        fprintf(stderr, "SPLIT_PROBE fn#%d: loop_word_pressure=%d "
+                "spilled_loop_words=%d iy_capturable=%d\n",
+                myidx, pressure, spilled, iy_cap);
+    free(flat); free(in_loop); free(bb_loop);
+}
+
 static int lower_op(FILE *out, Func *f, const Op *op)
 {
     /* Track the op's source location (independent of C_LINE emit mode) so
@@ -737,6 +1407,8 @@ static int lower_op(FILE *out, Func *f, const Op *op)
     case IR_EXTRACT_BYTE:      return gen_extract_byte(out, f, op);
     case IR_BR:                return gen_br(out, f, op);
     case IR_BR_ZERO:           return gen_br_zero(out, f, op);
+    case IR_COPY_STEP_BRZ:     return gen_copy_step_brz(out, f, op);
+    case IR_DEREF_CMP_BR:      return gen_deref_cmp_br(out, f, op);
     case IR_BR_COND:           return gen_br_cond(out, f, op);
     case IR_SWITCH:            return gen_switch(out, f, op);
     case IR_RET:               return gen_ret_misdispatched(out, f, op);
@@ -762,6 +1434,7 @@ static int lower_op(FILE *out, Func *f, const Op *op)
     case IR_CONV_BYTE_TO_HIGH: return gen_conv_byte_to_high(out, f, op);
     case IR_SHL:               return gen_shl(out, f, op);
     case IR_SHR:               return gen_shr(out, f, op);
+    case IR_MUL:               return gen_mul(out, f, op);
     case IR_CMP_ULT: case IR_CMP_UGE:
     case IR_CMP_LT:  case IR_CMP_GE:  return gen_cmp_lt_ge(out, f, op);
     case IR_CMP_UGT: case IR_CMP_ULE:
@@ -816,14 +1489,18 @@ static int lower_ret(FILE *out, Func *f, const Op *op)
                 load_to_hl(out, f, op->src[0]);
         }
     }
-    if (fp_active(f)) {
+    if (fp_active(f) && !L.cur_frameless) {
         /* FP teardown: IX holds the saved-IX address (frame_top). `ld sp,ix`
            drops the locals, then `pop ix` restores caller's IX. Both preserve
-           DEHL (and HL alone), so int-return and long-return converge here. */
+           DEHL (and HL alone), so int-return and long-return converge here.
+           idx3/IY-home in fp mode: the prologue pushed ix THEN iy, so after
+           `ld sp,ix` (ix == &saved_iy) the saved IY is on top — pop it BEFORE
+           the frame ptr, or `pop ix` would read the IY slot. */
         const char *fr = frame_reg();
         emit(out, "ld\tsp,%s", fr);
+        if (frame_has_saved_iy(f)) emit(out, "pop\tiy");
         emit(out, "pop\t%s", fr);
-    } else if (f->frame_size > 0) {
+    } else if (!L.cur_frameless && f->frame_size > 0) {
         if (use_add_sp(f, f->frame_size, is_acc ? 0 : 2)) {
             /* add sp,d preserves HL/DE/BC, so the int/long return-value
                stashes below are unneeded — drop the frame in one chain. */
@@ -856,10 +1533,24 @@ static int lower_ret(FILE *out, Func *f, const Op *op)
     if (!fp_active(f) && frame_has_saved_fp(f)) {
         /* Acc-tier function under -frameix: body addressed sp-relative, but
            entry pushed IX (gen_push_frame). The locals (if any) were dropped
-           above, so sp now points at the saved IX — restore the caller's
-           frame pointer so `ret` reads the return address. Touches only
-           IX/SP, leaving the return value in HL/DEHL/FA intact. */
+           above, so sp now points at the saved regs — pop the saved IY first
+           (pushed last, on top) then restore the caller's IX (frame ptr) so
+           `ret` reads the return address. Touches only IX/IY/SP, leaving the
+           return value in HL/DEHL/FA intact. (fp_active handled IY in its own
+           teardown above; this branch is the !fp_active acc-tier case only.) */
+        if (frame_has_saved_iy(f)) emit(out, "pop\tiy");
         emit(out, "pop\t%s", frame_reg());
+    } else if (!fp_active(f) && frame_has_saved_iy(f)) {
+        /* Pure sp-mode idx3 (no saved IX): sp now points at the saved IY; pop it
+           before the return address is read. Touches only IY/SP. */
+        emit(out, "pop\tiy");
+    }
+    if (frame_has_debug_fp(f)) {
+        /* no-IX -debug teardown: the frame drop above left sp at the saved
+           __debug_framepointer. l_debug_pop_frame restores it and removes the
+           2-byte save, preserving the return value in HL/DEHL (clobbers BC).
+           Sits below any critical l_pop_ei, matching the prologue push order. */
+        emit(out, "call\tl_debug_pop_frame");
     }
     if (f->is_interrupt) {
         /* Interrupt epilogue: restore the prologue-saved registers (in
@@ -1072,12 +1763,20 @@ static void emit_prologue(FILE *out, Func *f)
     }
     if (frame_has_saved_fp(f))      /* gen_push_frame: preserve caller's IX */
         emit(out, "push\t%s", frame_reg());
+    if (frame_has_saved_iy(f))      /* idx3: preserve caller's IY (callee-saved),
+                                       below the return address / above the frame */
+        emit(out, "push\tiy");
+    if (frame_has_debug_fp(f))      /* no-IX -debug: chain __debug_framepointer.
+                                       Pushes 2 bytes, preserves HL (fastcall arg),
+                                       clobbers BC — must precede the fastcall/sc1
+                                       register stash below and the frame alloc. */
+        emit(out, "call\tl_debug_push_frame");
 
     /* FRAMEPTR setup. Point IX at entry-sp when FP addressing is active;
        must be set BEFORE the frame alloc so it captures sp between locals
        and caller's frame for full [-128,+127] reach per slot. Teardown is
        ours too (IR emits `ret` directly, gen_pop_frame doesn't fire). */
-    if (fp_active(f)) {
+    if (fp_active(f) && !L.cur_frameless) {
         const char *fr = frame_reg();
         emit(out, "ld\t%s,0", fr);
         emit(out, "add\t%s,sp", fr);
@@ -1219,6 +1918,7 @@ static void emit_prologue(FILE *out, Func *f)
        long long return adds a stuffed pointer just above the return
        address, shifting args up another 2. */
     int retaddr_off = f->frame_size + (frame_has_saved_fp(f) ? 2 : 0)
+                    + (frame_has_saved_iy(f) ? 2 : 0)   /* saved IY (idx3) */
                     + (f->returns_longlong ? 2 : 0)
                     /* interrupt push-all (12) / critical l_push_di (2). */
                     + (f->is_interrupt ? 12 : ((f->flags & CRITICAL) ? 2 : 0));
@@ -1253,8 +1953,22 @@ static void emit_prologue(FILE *out, Func *f)
         if (vreg_in_idx2(f, v->id) && width == 2) {
             load_sp_off_to_hl(out, poff);
             emit(out, "push\thl");
-            emit(out, "pop\t%s", idx2_reg_name(f));
+            emit(out, "pop\t%s", vreg_idx_name(f, v->id));
             invalidate_hl_cache();
+            continue;
+        }
+        /* exx/alt-bank invariant param: load it into the alt pair ONCE. In the
+           alt bank (`exx`) read the caller slot via the alt HL (scratch) into
+           the home pair's halves, then swap back. sp is unchanged by exx, so
+           poff is valid; the alt bank isn't stacked, so no offset shift. */
+        if (vreg_in_exx(f, v->id) && width == 2) {
+            emit(out, "exx");
+            emit(out, "ld\thl,%d", poff);
+            emit(out, "add\thl,sp");
+            emit(out, "ld\t%s,(hl)", exx_half_lo(f));
+            emit(out, "inc\thl");
+            emit(out, "ld\t%s,(hl)", exx_half_hi(f));
+            emit(out, "exx");
             continue;
         }
         /* Read-only params live in place on the caller's stack — no
@@ -1356,6 +2070,160 @@ static int nxt_first_dehl_src(const Op *nxt)
     }
 }
 
+/* Is the def at bb->ops[j] "dst-dead" — its result is consumed only from the
+   HL/DEHL/A register cache and never re-read from a frame slot, so its spill
+   store can be skipped? Pure (f, bb, j); the render sets L.la.cur_dst_dead from
+   it, and the slot allocator's no-slot pruning reuses it (same predicate → the
+   two never disagree on whether a slot is touched). Extracted verbatim from the
+   render's inline computation. */
+static int def_dst_dead(const Func *f, const BB *bb, int j)
+{
+    const Op *op = &bb->ops[j];
+    if (op->dst < 0) return 0;
+    int live_out_dst = bb->live_out
+        && ir_bitset_get((const BitSet *)bb->live_out, op->dst);
+    int addr_observable = (f->vregs[op->dst].flags
+        & (IR_VREG_ADDR_TAKEN | IR_VREG_VOLATILE)) != 0;
+    /* Byte copy-loop idiom `while ((*d++ = v))` — a width-1 dst stored then
+       zero-branched, no other use: rides A across both (see the render). */
+    if (!addr_observable && !live_out_dst
+        && f->vregs[op->dst].width == 1 && j + 2 < bb->n_ops) {
+        const Op *st = &bb->ops[j + 1];
+        const Op *br = &bb->ops[j + 2];
+        if (st->kind == IR_ST_MEM && st->mem.kind == IR_MEM_VREG
+            && st->src[0] == op->dst && st->mem.base != op->dst
+            && !st->mem.bank_fn
+            && (br->kind == IR_BR_ZERO || br->kind == IR_BR_COND)
+            && br->src[0] == op->dst) {
+            int only_two = 1;
+            for (int k = j + 3; k < bb->n_ops && only_two; k++) {
+                int uu[16];
+                int nu2 = ir_op_uses(&bb->ops[k], uu,
+                                     (int)(sizeof uu / sizeof uu[0]));
+                for (int u = 0; u < nu2; u++)
+                    if (uu[u] == op->dst) { only_two = 0; break; }
+            }
+            if (only_two) return 1;
+        }
+    }
+    if (!addr_observable && !live_out_dst) {
+        int safe = 1;
+        int allow_cache_hit = 1;
+        int cache_pos = 0;
+        if (j + 1 < bb->n_ops && f->vregs[op->dst].width == 4) {
+            int p = nxt_first_dehl_src(&bb->ops[j + 1]);
+            if (p >= 0) cache_pos = p;
+        }
+        for (int k = j + 1; k < bb->n_ops && safe; k++) {
+            int uses[16];
+            int nu = ir_op_uses(&bb->ops[k], uses,
+                                (int)(sizeof uses / sizeof uses[0]));
+            int k_redefs_dst = 0;
+            if (bb->ops[k].kind == IR_POSTSTEP
+                || (bb->ops[k].kind == IR_LD_MEM
+                    && bb->ops[k].mem.post_step != 0)) {
+                int kd[2];
+                int knd = ir_op_defs(&bb->ops[k], kd, 2);
+                for (int d = 0; d < knd; d++)
+                    if (kd[d] == op->dst) { k_redefs_dst = 1; break; }
+            }
+            for (int u = 0; u < nu; u++) {
+                if (uses[u] != op->dst) continue;
+                int cache_served =
+                    allow_cache_hit &&
+                    k == j + 1 &&
+                    !k_redefs_dst &&
+                    bb->ops[k].src[cache_pos] == op->dst &&
+                    bb->ops[k].src[1 - cache_pos] != op->dst;
+                if (!cache_served) { safe = 0; break; }
+                allow_cache_hit = 0;
+            }
+            if (!safe) break;
+            if (bb->ops[k].kind == IR_PUSH_DEHL_LONG
+                && bb->ops[k].src[0] == op->dst)
+                break;
+            int defs[2];
+            int nd = ir_op_defs(&bb->ops[k], defs, 2);
+            int redef = 0;
+            for (int d = 0; d < nd; d++)
+                if (defs[d] == op->dst) { redef = 1; break; }
+            if (redef) break;
+        }
+        if (safe) return 1;
+    }
+    return 0;
+}
+
+/* A NO_SLOT byte rides A from its def straight to its consumer and is never
+   written back. That is only sound when the consumer READS the byte from A and
+   can never need to spill it to a slot. Terminal A-readers qualify: a memory
+   store of the byte (ST_MEM) and a branch test (BR_ZERO/BR_COND) — the exact
+   shapes the copy-loop / `while (*s)` / `*d = *s` idioms produce.
+
+   Byte ALU / MOV / widening consumers do NOT qualify: their operand staging
+   can `store_a_byte` an A-resident operand to a slot (e.g. gen_sub spills the
+   subtrahend to free A; a def that clobbers A spills a still-live A byte), and
+   with no slot that lands below-frame / aborts. Those keep their slot. This
+   was the umaxd.c:49 abort — a byte `o[p+16]` deref whose value flowed to a
+   MOV kept in A, then got spilled during a neighbouring op's A staging. */
+static int no_slot_consumer_safe(const Func *f, const BB *bb, int j)
+{
+    int v = bb->ops[j].dst;
+    if (j + 1 >= bb->n_ops) return 0;
+    const Op *use = &bb->ops[j + 1];
+    switch (use->kind) {
+    case IR_ST_MEM:                       /* store the byte to memory */
+        return use->src[0] == v && use->mem.base != v;
+    case IR_BR_ZERO:                      /* test the byte, branch */
+    case IR_BR_COND:
+        return use->src[0] == v;
+    default:
+        return 0;
+    }
+    (void)f;
+}
+
+/* Dead-slot pruning: flag byte SPILL vregs that never touch a frame slot, so
+   ir_assign_slots reserves none (shrinking frame_size, often to 0). A byte vreg
+   is A-only iff EVERY def is dst-dead AND feeds a terminal A-reader
+   (no_slot_consumer_safe) — then lowering keeps each result in A, serves the use
+   from the cache, and never spills it. Runs after ir_alloc (needs phys) and
+   before ir_assign_slots. Word/wider temps keep the ss dead-store pass; this is
+   the byte analogue the ss machinery doesn't cover. */
+static void compute_no_slot_bytes(Func *f)
+{
+    if (opt_disabled("slot-prune")) return;
+    for (int v = 0; v < f->n_vregs; v++) {
+        VReg *vr = &f->vregs[v];
+        if (vr->width != 1) continue;
+        if (vr->flags & (IR_VREG_ADDR_TAKEN | IR_VREG_VOLATILE
+                         | IR_VREG_PARAM | IR_VREG_PARAM_IN_PLACE)) continue;
+        if (f->vreg_to_phys && f->vreg_to_phys[v] != IR_PR_SPILL) continue;
+        int n_defs = 0, all_dead = 1;
+        for (int b = 0; b < f->n_bbs && all_dead; b++) {
+            const BB *bb = &f->bbs[b];
+            for (int j = 0; j < bb->n_ops; j++) {
+                int defs[2];
+                int nd = ir_op_defs(&bb->ops[j], defs, 2);
+                int is_def = 0;
+                for (int k = 0; k < nd; k++) if (defs[k] == v) { is_def = 1; break; }
+                if (!is_def) continue;
+                n_defs++;
+                /* Only a plain single-dst def can be an A-only byte: a POSTSTEP
+                   or post-step LD_MEM redefines its base too (multi-def) — never
+                   the A-cached shape. def_dst_dead vets the value flow; the
+                   consumer must be a terminal A-reader that never spills it. */
+                if (bb->ops[j].dst != v || !def_dst_dead(f, bb, j)
+                    || !no_slot_consumer_safe(f, bb, j)) {
+                    all_dead = 0; break;
+                }
+            }
+        }
+        if (n_defs >= 1 && all_dead)
+            vr->flags |= IR_VREG_NO_SLOT;
+    }
+}
+
 /* Is `kind` a commutative long binop where swapping src[0] and src[1]
    preserves semantics? Used by the lookahead to rotate dst into the
    first-loaded src position so the DEHL cache hits. */
@@ -1365,12 +2233,162 @@ static int op_is_commutative(OpKind kind)
         || kind == IR_OR  || kind == IR_XOR;
 }
 
+/* Promote hot, currently-spilled SINGLE-DEF width-1 vregs to free index-register
+   halves (PR_IYL/IYH/IXL/IXH) — a slotless, clobber-free extra byte home. Purely
+   additive: only takes vregs the allocator left in a slot (IR_PR_SPILL), so it
+   never displaces a register home; a value that can't be placed simply stays in
+   its slot. Safe because:
+   - SINGLE-DEF ⇒ the def dominates every use (SSA), so the half is always valid
+     at a read (no belief/carry machinery needed);
+   - NO calls/asm in the function ⇒ the index reg is never clobbered (the operand
+     loader never stages there either);
+   - index halves only reach BASE-page ops (ld/add/sub/and/or/xor/cp a,iyl) —
+     the CB-page in-place shift paths gate on byte_home_phys, which excludes
+     index halves, so `sla iyl` (which doesn't exist) is never emitted.
+   z80/z80n/ez80 only (index-half ALU). Runs after ir_alloc, before
+   ir_assign_slots (so promoted vregs get needs_slot=0).
+
+   OPT-IN (IR_IDXHALF): DISABLED by default. Homing a byte in an index-register
+   half CLOBBERS the whole index register (IX/IY), but IY is callee-saved in the
+   z88dk ABI — e.g. l_qsort/l_bsearch hold the comparator function pointer in IY
+   across every comparator call (l_setiy + asm_l_qsort). A leaf comparator that
+   homes a byte in IYL/IYH corrupts that pointer → crash (was: stdlib bsearch
+   suite). Making this sound needs the function to push/pop the index register it
+   uses (with the matching param/frame-offset compensation across every calling
+   convention + teardown path); until that lands, the feature is off by default.
+   Set IR_IDXHALF to re-enable for measurement. */
+static void assign_idxhalf_homes(Func *f)
+{
+    if (!getenv("IR_IDXHALF")) return;   /* opt-in: unsound re callee-saved IX/IY */
+    if (!(c_cpu == CPU_Z80 || IS_Z80N() || IS_EZ80())) return;
+    if (!f || f->n_vregs <= 0 || !f->vreg_to_phys) return;
+    /* No calls/asm — else IX/IY would be trashed mid-live-range. */
+    for (int b = 0; b < f->n_bbs; b++)
+        for (int j = 0; j < f->bbs[b].n_ops; j++) {
+            OpKind k = f->bbs[b].ops[j].kind;
+            if (k == IR_CALL || k == IR_HCALL || k == IR_ASM) return;
+        }
+    /* Candidate halves — never offer halves of the FRAME register (it's used as
+       a pair by every (ix+d) access, and the frame isn't a vreg so the interval
+       check can't see it), nor of a platform-reserved index register
+       (--reserve-regs-ix/-iy). c_framepointer_is_ix == 1 → IX is the frame,
+       == -1 → sp-mode (no frame). (fp_active is per-function but unreliable here
+       — frame_size isn't set until ir_assign_slots runs after this pass; the
+       global choice is the safe, stable gate.) A non-frame index reg's own
+       tenant (an idx2 counter/param) IS a vreg, so its half availability is
+       decided per byte by live-interval overlap below. */
+    PhysReg halves[4]; int nhalves = 0;
+    if (!c_reserve_iy) {               /* IY never the frame; offer unless reserved */
+        halves[nhalves++] = IR_PR_IYL; halves[nhalves++] = IR_PR_IYH;
+    }
+    if (c_framepointer_is_ix != 1 && !c_reserve_ix) {   /* IX not the frame nor reserved */
+        halves[nhalves++] = IR_PR_IXL; halves[nhalves++] = IR_PR_IXH;
+    }
+    if (nhalves == 0) { return; }
+    /* Per-vreg def count, a DEPTH-WEIGHTED use score (a use in a loop body is
+       worth far more than a straight-line one — a byte compared each inner
+       iteration appears only ONCE statically but runs many times), and a
+       conservative live interval [first,last] in linear op order. Params are
+       live from entry (first=0). ir_op_defs is used so a self-stepped op
+       (defines src[0], not dst) is counted correctly. */
+    int nv = f->n_vregs;
+    int *ndef = calloc((size_t)nv, sizeof(int));
+    long *wuse = calloc((size_t)nv, sizeof(long));   /* depth-weighted use score */
+    int *first = malloc((size_t)nv * sizeof(int));
+    int *last  = malloc((size_t)nv * sizeof(int));
+    if (!ndef || !wuse || !first || !last) {
+        free(ndef); free(wuse); free(first); free(last); return;
+    }
+    for (int v = 0; v < nv; v++) { first[v] = INT_MAX; last[v] = -1; }
+    /* Cheap loop-nesting depth per BB (selection ranking only — never affects
+       correctness): count the back-edge spans [target..source] (id-based,
+       contiguous approximation) each BB falls in. f->bbs[].loop_depth is not
+       populated at this stage. */
+    int *bdep = calloc((size_t)f->n_bbs, sizeof(int));
+    if (bdep)
+        for (int i = 0; i < f->n_bbs; i++)
+            for (int s = 0; s < ir_bb_n_succ(&f->bbs[i]); s++) {
+                int t = ir_bb_succ_at(&f->bbs[i], s);
+                if (t < 0 || t > i) continue;             /* back-edge: t <= i */
+                for (int b = t; b <= i && b < f->n_bbs; b++) bdep[b]++;
+            }
+    int g = 0;
+    for (int b = 0; b < f->n_bbs; b++) {
+        int dep = bdep ? bdep[b] : 0;
+        if (dep > 4) dep = 4;
+        long w = 1L << (3 * dep);            /* depth 0→1, 1→8, 2→64, … (~8×/level) */
+        for (int j = 0; j < f->bbs[b].n_ops; j++, g++) {
+            const Op *o = &f->bbs[b].ops[j];
+            int d[8], u[16];
+            int nd = ir_op_defs(o, d, 8);
+            for (int k = 0; k < nd; k++) if (d[k] >= 0 && d[k] < nv) {
+                ndef[d[k]]++;
+                if (g < first[d[k]]) first[d[k]] = g;
+                if (g > last[d[k]])  last[d[k]]  = g;
+            }
+            int un = ir_op_uses(o, u, 16);
+            for (int k = 0; k < un; k++) if (u[k] >= 0 && u[k] < nv) {
+                wuse[u[k]] += w;
+                if (g < first[u[k]]) first[u[k]] = g;
+                if (g > last[u[k]])  last[u[k]]  = g;
+            }
+        }
+    }
+    for (int v = 0; v < nv; v++)
+        if (f->vregs[v].flags & (IR_VREG_PARAM | IR_VREG_PARAM_IN_PLACE))
+            first[v] = 0;                                   /* live from entry */
+    /* Greedily place the hottest eligible bytes; each into the first candidate
+       half free over its interval (no overlapping vreg on the same half or on
+       the whole pair). Multiple bytes can share a pair (IYL + IYH) or reuse a
+       half's pair across disjoint ranges. */
+    for (;;) {
+        int best = -1;
+        for (int v = 0; v < nv; v++) {
+            if (f->vreg_to_phys[v] != IR_PR_SPILL) continue;   /* additive only */
+            if (f->vregs[v].width != 1) continue;
+            /* PARAMs are live-in from the caller with NO def op that writes the
+               half — the incoming value would never reach a slotless index home
+               (and ndef counts only its in-body redefs, hiding this). Exclude. */
+            if (f->vregs[v].flags & (IR_VREG_PARAM | IR_VREG_PARAM_IN_PLACE))
+                continue;
+            if (ndef[v] != 1) continue;                        /* SSA dominance */
+            if (wuse[v] < 8) continue;                         /* hot: ≥1 loop use */
+            if (last[v] < 0) continue;                         /* dead */
+            if (f->vregs[v].flags & (IR_VREG_ADDR_TAKEN | IR_VREG_VOLATILE))
+                continue;
+            if (best < 0 || wuse[v] > wuse[best]) best = v;
+        }
+        if (best < 0) break;
+        int placed = 0;
+        for (int h = 0; h < nhalves && !placed; h++) {
+            PhysReg H = halves[h];
+            PhysReg pair = (H == IR_PR_IYL || H == IR_PR_IYH) ? IR_PR_IY : IR_PR_IX;
+            int conflict = 0;
+            for (int u = 0; u < nv && !conflict; u++) {
+                PhysReg pu = f->vreg_to_phys[u];
+                if (pu != H && pu != pair) continue;   /* same half, or full-pair tenant */
+                int s = first[best] > first[u] ? first[best] : first[u];
+                int e = last[best]  < last[u]  ? last[best]  : last[u];
+                if (s <= e) conflict = 1;              /* intervals overlap */
+            }
+            if (!conflict) { f->vreg_to_phys[best] = H; placed = 1; }
+        }
+        if (!placed) {
+            /* No half free over its range — mark ineligible so the scan
+               advances (keep it spilled). */
+            ndef[best] = 0;
+        }
+    }
+    free(ndef); free(wuse); free(first); free(last); free(bdep);
+}
+
 int ir_lower_func(FILE *out, Func *f)
 {
     if (!f) {
         fputs("ir_lower: null Func\n", stderr);
         return -1;
     }
+    L.spill_ix = L.spill_sp = 0;   /* IR_SPILL_STATS: per-function reset */
 
     /* __naked: emit the body asm verbatim — no prologue, no epilogue, no
        frame, no BB labels, no trailing `ret` (the asm owns the entire
@@ -1399,6 +2417,13 @@ int ir_lower_func(FILE *out, Func *f)
            CFG. */
         int pruned  = ir_opt_prune_unreachable(f);
         int hoisted = ir_opt_licm(f);
+        /* Spatial address CSE: clustered accesses (stencil a[k]/a[k±1], neighbour
+           sums) share one anchor address + a folded byte offset. BEFORE ivsr so
+           the shared base+index structure is still visible (ivsr would otherwise
+           strength-reduce each clustered access into an independent stepped IV,
+           hiding the common index); ivsr then reduces just the anchor and the
+           offset loads ride it. IR_NO_ADDR_CSE opts out. */
+        int addrcse = ir_opt_addr_cse(f);
         /* Strength-reduce indexed-array address recomputes to stepped
            pointers right after LICM (loops found, base invariants
            hoisted) and before the matcher/CSE/DCE that dedup the inits
@@ -1430,6 +2455,7 @@ int ir_lower_func(FILE *out, Func *f)
            clean the NOPs it leaves. Gated on c_word_resident ⇒ inert
            (byte-identical) when off. */
         int reassoc = ir_opt_reassoc_reduction(f);
+        int rcoal   = ir_opt_reduce_coalesce(f);
         int cse     = ir_opt_cse(f);
         /* After cse so duplicate per-lane address ADDs have been
            merged; before the long-push inserter. */
@@ -1474,16 +2500,16 @@ int ir_lower_func(FILE *out, Func *f)
         if ((hoisted > 0 || ivsr > 0 || fwd > 0 || cfold > 0
              || packs > 0 || dce > 0 || early > 0
              || late > 0 || match > 0 || narrow > 0 || ivnarrow > 0
-             || cse > 0 || pushes > 0 || deadret > 0 || reassoc > 0
-             || pruned > 0)
+             || cse > 0 || addrcse > 0 || pushes > 0 || deadret > 0 || reassoc > 0
+             || rcoal > 0 || pruned > 0)
             && getenv("IR_OPT_VERBOSE"))
             fprintf(stderr,
                     "ir_opt: %d prune, %d licm, %d ivsr, %d early, %d st2ld, "
-                    "%d cfold, %d reassoc, %d match, %d cse, "
+                    "%d cfold, %d reassoc, %d match, %d cse, %d addrcse, "
                     "%d packs, %d late, %d pushes, %d deadret, "
                     "%d dce, %d narrow, %d ivnarrow in func\n",
                     pruned, hoisted, ivsr, early, fwd, cfold, reassoc, match,
-                    cse, packs, late, pushes, deadret, dce, narrow, ivnarrow);
+                    cse, addrcse, packs, late, pushes, deadret, dce, narrow, ivnarrow);
     }
 
     /* Drop orphan vregs (abandoned builder temps — in no op slot) before the
@@ -1496,7 +2522,14 @@ int ir_lower_func(FILE *out, Func *f)
     ir_compute_op_liveness(f);
     ir_compute_live_ranges(f);
     ir_alloc(f);
+    lra_split_probe(f);          /* Phase-2a prize probe (IR_SPLIT_PROBE, inert) */
+    assign_idxhalf_homes(f);
+    compute_no_slot_bytes(f);
     ir_assign_slots(f);
+    /* Frameless (Tier-B): decided once frame_size + homes are known; must be set
+       before any fp_active/frame_has_saved_fp use (prepick region proof, render).
+       Changes param_caller_off's saved-IX offset (frame_has_saved_fp=0 → +2). */
+    L.cur_frameless = frameless_ok(f);
     /* IR_DUMP_ALLOC prints the IR with phys-reg assignments and live ranges
        (distinct from the pre-lower IR_DUMP — reflects the allocator's view). */
     if (getenv("IR_DUMP_ALLOC"))
@@ -1524,9 +2557,9 @@ int ir_lower_func(FILE *out, Func *f)
     /* Lazy-spill config (per-pass deferral state lives in
        lower_func_render). Default ON (sound static reaching-reloads model);
        IR_NO_LAZY_SPILL opts out to the single-pass lowering for A/B. */
-    L.lazy_spill_on = getenv("IR_NO_LAZY_SPILL") == NULL;
+    L.lazy_spill_on = !opt_disabled("lazy-spill");
     int want_lazy = L.lazy_spill_on;
-    f32_stack_arg_on = getenv("IR_NO_F32_STACK_ARG") == NULL;
+    f32_stack_arg_on = !opt_disabled("f32-stack-arg");
 
     /* No function label here — the surrounding legacy scaffolding
        (declparse.c + codegen.c) already emits `._<name>`. The render
@@ -1555,7 +2588,7 @@ int ir_lower_func(FILE *out, Func *f)
        re-emit the constant instead of reloading a slot. */
     L.remat_def = calloc((size_t)(f->n_vregs > 0 ? f->n_vregs : 1),
                          sizeof(const Op *));
-    if (L.remat_def && !getenv("IR_NO_REMAT")) {
+    if (L.remat_def && !opt_disabled("remat")) {
         int *ndef = calloc((size_t)(f->n_vregs > 0 ? f->n_vregs : 1), sizeof(int));
         if (ndef) {
             /* Count via ir_op_defs — some ops define through a non-dst field
@@ -1657,13 +2690,19 @@ int ir_lower_func(FILE *out, Func *f)
             L.cur_home_is_word = 1;
             L.cur_func_whome = f->word_home_vreg;
             L.la.cur_branch_test_kind = 0;
+            /* Same DE-home fold arming as the render, so op_de_clean's region
+               proof here matches what the render will actually emit. */
+            if (f->de_home_general) L.cur_de_home = f->word_home_vreg;
             compute_home_region(f, f->word_home_vreg, bb_alias, &wlo, &whi);
             L.cur_home_is_word = 0;
             L.cur_func_whome = -1;
+            L.cur_de_home = -1;
             if (wlo < 0) {
                 memcpy(f->vreg_to_phys, wh_prepick,
                        (size_t)f->n_vregs * sizeof(int));
                 f->word_home_vreg = -1;
+                f->de_home_general = 0;
+                f->de_home_is_ptr = 0;
                 ir_assign_slots(f);
             }
         }
@@ -1677,6 +2716,15 @@ int ir_lower_func(FILE *out, Func *f)
        a BB end), then pass 2 renders for real with deferral on, its cross-BB
        defer decision consulting that complete map. */
     int rc;
+    /* Render the function body to a scratch file, then copy to `out` dropping
+       dead BB labels (emit_dropping_dead_bb_labels). IR_NO_LABEL_ELIDE opts out
+       to writing `out` directly. */
+    int elide_labels = !opt_disabled("label-elide");
+    int max_bb = -1;
+    for (int i = 0; i < f->n_bbs; i++)
+        if (f->bbs[i].id > max_bb) max_bb = f->bbs[i].id;
+    FILE *rout = elide_labels ? tmpfile() : NULL;
+    if (!rout) { rout = out; elide_labels = 0; }
     int *bb_hl_out_p1 = NULL;
     /* Static lazy-spill state — off unless the two-pass path arms it. */
     L.ss_phase = 0;
@@ -1688,7 +2736,7 @@ int ir_lower_func(FILE *out, Func *f)
     L.ss_cur_g = -1;
     L.ss_pinned = 0;
     if (!want_lazy) {
-        rc = lower_func_render(out, f, 0, NULL, bb_hl_out, bb_lowered,
+        rc = lower_func_render(rout, f, 0, NULL, bb_hl_out, bb_lowered,
                                bb_pending_out, bb_pred_cnt, bb_preds,
                                bb_alias);
     } else {
@@ -1732,7 +2780,7 @@ int ir_lower_func(FILE *out, Func *f)
         if (!scratch) {
             /* Degraded (OOM / no memstream): single deferral-off pass.
                Correct, just forgoes the lazy win. */
-            rc = lower_func_render(out, f, 0, NULL, bb_hl_out, bb_lowered,
+            rc = lower_func_render(rout, f, 0, NULL, bb_hl_out, bb_lowered,
                                    bb_pending_out, bb_pred_cnt, bb_preds,
                                    bb_alias);
             free(src_snap);
@@ -1770,7 +2818,7 @@ int ir_lower_func(FILE *out, Func *f)
                 /* Pass 2: skip the dead stores. */
                 L.ss_store_dead = store_dead;
                 L.ss_phase = store_dead ? 2 : 0;
-                rc = lower_func_render(out, f, 1, bb_hl_out_p1, bb_hl_out,
+                rc = lower_func_render(rout, f, 1, bb_hl_out_p1, bb_hl_out,
                                        bb_lowered, bb_pending_out,
                                        bb_pred_cnt, bb_preds, bb_alias);
                 L.ss_phase = 0;
@@ -1788,6 +2836,12 @@ int ir_lower_func(FILE *out, Func *f)
         L.ss_op_reload = NULL;
         L.ss_op_cacheread = NULL;
     }
+    if (elide_labels) {
+        if (rc == 0) emit_dropping_dead_bb_labels(out, rout, max_bb);
+        else { rewind(rout); char buf[1024];   /* error path: copy verbatim */
+               while (fgets(buf, sizeof buf, rout)) fputs(buf, out); }
+        fclose(rout);
+    }
     free(bb_hl_out_p1);
 
     free(bb_alias);
@@ -1801,6 +2855,9 @@ int ir_lower_func(FILE *out, Func *f)
     for (int i = 0; i < f->n_bbs; i++) free(bb_preds[i]);
     free(bb_preds);
     ir_free_liveness(f);
+    if (spill_stats_on > 0)
+        fprintf(stderr, "SPILL %-24s ix=%-5d sp=%-5d\n",
+                f->fn ? ir_sym_name(f->fn) : "?", L.spill_ix, L.spill_sp);
     return rc;
 }
 
@@ -1856,6 +2913,7 @@ static int lower_func_render(FILE *out, Func *f, int lazy,
     /* Per-pass state reset (everything that was at function entry except
        func_emit_idx, which the caller bumps once for both passes). */
     L.cmp_label_counter = 0;
+    if (!lazy) lra_phase1_probe(f);   /* once per function (non-lazy pass) */
     L.lazy_spill_on = lazy;
     L.pending_spill_v = -1;
     cur_lazy_out = out;
@@ -1867,6 +2925,7 @@ static int lower_func_render(FILE *out, Func *f, int lazy,
     L.cur_func_ehome = -1;
     L.cur_home_is_word = 0;
     L.cur_func_whome = -1;
+    L.cur_de_home = -1;          /* set by the orchestrator's DE-home decision */
     for (int v = 0; v < f->n_vregs; v++)
         if (f->vreg_to_phys
             && byte_home_slotbacked(f->vreg_to_phys[v])) { L.cur_func_ehome = v; break; }
@@ -1880,12 +2939,16 @@ static int lower_func_render(FILE *out, Func *f, int lazy,
         L.cur_func_whome = f->word_home_vreg;
         L.cur_func_ehome = L.cur_func_whome;
         L.cur_home_is_word = 1;
+        /* General (non-accumulate) DE-home: arm the (ix+d) compare/ALU folds so
+           the region stays DE-clean. -1 for a reduction accumulator (the
+           try_word_accumulate path already keeps DE = home). */
+        if (f->de_home_general) L.cur_de_home = f->word_home_vreg;
     }
     /* Home-resident loop: where the slot-backed home stays in E/D (or DE)
        across a loop, suppress per-iter spills + assert residency at the
        header. */
     L.cur_home_region_lo = L.cur_home_region_hi = -1;
-    if (L.cur_func_ehome >= 0 && !getenv("IR_NO_HOME_RESIDENT"))
+    if (L.cur_func_ehome >= 0 && !opt_disabled("home-resident"))
         compute_home_region(f, L.cur_func_ehome, bb_alias,
                             &L.cur_home_region_lo, &L.cur_home_region_hi);
     /* Home exit-flush hoist: if the region leaves to exactly ONE target block
@@ -1896,7 +2959,7 @@ static int lower_func_render(FILE *out, Func *f, int lazy,
        or sp via HL, flush the one byte). IR_NO_WH_EXIT_HOIST opts out. */
     L.cur_home_exit_flush_bb = -1;
     if (L.cur_func_ehome >= 0
-        && L.cur_home_region_lo >= 0 && !getenv("IR_NO_WH_EXIT_HOIST")) {
+        && L.cur_home_region_lo >= 0 && !opt_disabled("wh-exit-hoist")) {
         int tgt = -1, ok = 1;
         for (int b = L.cur_home_region_lo; b <= L.cur_home_region_hi && ok; b++) {
             const BB *sb = &f->bbs[b];
@@ -1951,6 +3014,8 @@ static int lower_func_render(FILE *out, Func *f, int lazy,
     if (L.bb_byte_out_dirty)
         for (int i = 0; i < f->n_bbs; i++) L.bb_byte_out_dirty[i] = 0;
     L.cur_sp_adjust = 0;
+    L.cur_stack_resident = -1;
+    L.af_park_depth = 0;
     bc_args_save_depth = 0;
     L.la.cur_stack_long_top = -1;
     L.la.cur_dehl_inline_push = -1;
@@ -2021,6 +3086,8 @@ static int lower_func_render(FILE *out, Func *f, int lazy,
         /* The long data-stack is per-BB. Any push/pop imbalance at
            a BB boundary would shift sp for unrelated code. */
         L.cur_sp_adjust = 0;
+        L.cur_stack_resident = -1;   /* stack-transient never crosses a BB */
+        L.af_park_depth = 0;         /* AF byte-park never crosses a BB */
         bc_args_save_depth = 0;
         L.la.cur_stack_long_top = -1;
         L.la.cur_dehl_inline_push = -1;
@@ -2038,8 +3105,19 @@ static int lower_func_render(FILE *out, Func *f, int lazy,
            can clobber DE first (pending spill already cleared). */
         if (L.cur_home_exit_flush_bb >= 0
             && bb->id == L.cur_home_exit_flush_bb) {
-            if (L.cur_home_is_word) word_home_exit_flush(out, f);
-            else                    byte_home_exit_flush(out, f);
+            /* Skip the flush when the home is DEAD at the (sole, region-only)
+               exit block: its slot is never read again, so writing it back is
+               pure waste. Hot for a loop-regalloc pointer home dead after its
+               loop (strcpy's `s`/`d`) and any dead-after-loop accumulator. The
+               exit block is the unique region-leaving target, so its live_in
+               captures all post-region liveness of the home. */
+            int hv = L.cur_home_is_word ? L.cur_func_whome : L.cur_func_ehome;
+            int home_live = hv >= 0 && bb->live_in
+                && ir_bitset_get((const BitSet *)bb->live_in, hv);
+            if (home_live) {
+                if (L.cur_home_is_word) word_home_exit_flush(out, f);
+                else                    byte_home_exit_flush(out, f);
+            }
             L.cur_byte_home_dirty = 0;
             L.cur_byte_home_vreg = -1;
         }
@@ -2277,86 +3355,10 @@ static int lower_func_render(FILE *out, Func *f, int lazy,
                First cache-loaded src is src[0] for most ops (HL for ints,
                DEHL for longs); variable-RHS long IR_ADD loads src[1] first.
                nxt_first_dehl_src() returns the actual first slot, else 0. */
-            L.la.cur_dst_dead = 0;
-            if (op->dst >= 0) {
-                int live_out_dst = bb->live_out
-                    && ir_bitset_get((const BitSet *)bb->live_out, op->dst);
-                /* A def of an address-taken or volatile vreg is never dead:
-                   its slot store is observable through the pointer (IR_LEA
-                   reads the slot, not the value in HL) or required by
-                   volatile semantics. The cache-served exception below
-                   wrongly counts IR_LEA's read as a register use, which
-                   would otherwise elide the spill and leave the slot
-                   uninitialised (`&x` of a const/copy-init local read garbage). */
-                int addr_observable = (f->vregs[op->dst].flags
-                    & (IR_VREG_ADDR_TAKEN | IR_VREG_VOLATILE)) != 0;
-                if (!addr_observable && !live_out_dst) {
-                    int safe = 1;
-                    int allow_cache_hit = 1; /* one cache-hit use OK */
-                    int cache_pos = 0;
-                    if (j + 1 < bb->n_ops
-                        && f->vregs[op->dst].width == 4) {
-                        int p = nxt_first_dehl_src(&bb->ops[j + 1]);
-                        if (p >= 0) cache_pos = p;
-                    }
-                    for (int k = j + 1; k < bb->n_ops && safe; k++) {
-                        int uses[16];
-                        int nu = ir_op_uses(&bb->ops[k], uses,
-                                            (int)(sizeof uses / sizeof uses[0]));
-                        /* A redefinition of op->dst by op k breaks the
-                           cache-served handoff ONLY when k reads that operand
-                           from its SLOT and writes it back: a POSTSTEP (base is
-                           allocator-pinned slot-resident) or a post-stepping
-                           LD_MEM (`*p++`). For those the producing def MUST
-                           spill — else `int x=5; int y=x++;` and `a=*p++; b=*p;`
-                           read an uninitialised / un-stepped slot. A regular ALU
-                           redefinition (`a = a + b`) reads dst from the cache the
-                           def leaves, so the handoff holds and the spill elides. */
-                        int k_redefs_dst = 0;
-                        if (bb->ops[k].kind == IR_POSTSTEP
-                            || (bb->ops[k].kind == IR_LD_MEM
-                                && bb->ops[k].mem.post_step != 0)) {
-                            int kd[2];
-                            int knd = ir_op_defs(&bb->ops[k], kd, 2);
-                            for (int d = 0; d < knd; d++)
-                                if (kd[d] == op->dst) { k_redefs_dst = 1; break; }
-                        }
-                        for (int u = 0; u < nu; u++) {
-                            if (uses[u] != op->dst) continue;
-                            int cache_served =
-                                allow_cache_hit &&
-                                k == j + 1 &&
-                                !k_redefs_dst &&
-                                bb->ops[k].src[cache_pos] == op->dst &&
-                                bb->ops[k].src[1 - cache_pos] != op->dst;
-                            if (!cache_served) { safe = 0; break; }
-                            allow_cache_hit = 0;
-                        }
-                        /* Redef-stop: if this op redefines our dst
-                           (e.g. IR_POP_DEHL_LONG dst=v_a after an
-                           earlier IR_PUSH_DEHL_LONG src=v_a), later
-                           uses pair with the redef, not the original
-                           def. Stop walking. */
-                        if (!safe) break;
-                        /* IR_PUSH_DEHL_LONG of our dst is a lifetime
-                           ender too — the value moves to the data
-                           stack and the downstream consumer either
-                           pops it or absorbs it directly off the
-                           stack. No slot reload of v_a past this. */
-                        if (bb->ops[k].kind == IR_PUSH_DEHL_LONG
-                            && bb->ops[k].src[0] == op->dst)
-                            break;
-                        int defs[2];
-                        int nd = ir_op_defs(&bb->ops[k], defs, 2);
-                        int redef = 0;
-                        for (int d = 0; d < nd; d++) {
-                            if (defs[d] == op->dst) { redef = 1; break; }
-                        }
-                        if (redef) break;
-                    }
-                    if (safe) L.la.cur_dst_dead = 1;
-                }
-            }
+            /* dst-dead: skip op->dst's slot spill because its value won't be
+               re-read from memory (all later in-BB uses are cache-served). The
+               predicate is shared with the slot allocator's no-slot pruning. */
+            L.la.cur_dst_dead = def_dst_dead(f, bb, j);
 
             /* Branch-test lookahead: if op[i+1] is BR_ZERO/COND
                reading op->dst (and dst is dead — guaranteed when
@@ -2690,21 +3692,25 @@ static int lower_func_render(FILE *out, Func *f, int lazy,
                unconditional IR_BR at end of BB targeting the next
                BB in lowering order. */
             if (op->kind == IR_BR && j == bb->n_ops - 1) {
-                /* Skip against the next BB that actually EMITS code —
-                   alias-elided trampolines produce no bytes, so
-                   falling through lands on the BB after them. Resolve
-                   the jp target through the alias map too. */
-                int next_emitted = -1;
-                for (int k = i + 1; k < f->n_bbs; k++) {
-                    if (!bb_alias || bb_alias[k] < 0) {
-                        next_emitted = k;
-                        break;
-                    }
-                }
                 int tgt = op->label;
                 if (bb_alias && tgt >= 0 && tgt < f->n_bbs
                     && bb_alias[tgt] >= 0)
                     tgt = bb_alias[tgt];
+                /* Skip against the next BB that actually EMITS code —
+                   alias-elided trampolines produce no bytes, and an empty
+                   byte-shift-fuse "skip" arm (its SHL hoisted before the
+                   branch) also produces none, so falling through lands on the
+                   BB after them. */
+                int next_emitted = -1;
+                for (int k = i + 1; k < f->n_bbs; k++) {
+                    if (bb_alias && bb_alias[k] >= 0)
+                        continue;
+                    if (f->bbs[k].id != tgt
+                        && bb_is_empty_shl_arm_to(f, &f->bbs[k], tgt))
+                        continue;
+                    next_emitted = k;
+                    break;
+                }
                 if (next_emitted >= 0 && tgt == next_emitted) {
                     /* Preheader fall-through into a resident loop: re-home
                        the slot-backed home into E here too (this elided BR is
@@ -2781,11 +3787,13 @@ static int lower_func_render(FILE *out, Func *f, int lazy,
                global index so pass 1 records against it and pass 2's
                verdict (ss_store_dead) is read for it. */
             L.ss_cur_g = L.ss_op_base ? L.ss_op_base[bb->id] + j : -1;
+            if (verify_on > 0) verify_len = 0;   /* capture this op's emitted asm */
             if (op->kind == IR_RET) {
                 rc = lower_ret(out, f, op);
             } else {
                 rc = lower_op(out, f, op);
             }
+            if (verify_on > 0) { verify_buf[verify_len] = 0; ir_verify_op(f, op, verify_buf); }
             L.ss_cur_g = -1;
             if (rc != 0) goto cleanup_err;
             if (L.la.cur_skip_next_op) {

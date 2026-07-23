@@ -62,8 +62,23 @@ mandelbrot set is produced.  This maps to a ceil(60/8)*60 = 480 byte
 block of memory to hold the result.
 
 
-RESULTS
-=======
+CLASSIC Z80 / 8085 SUMMARY
+==========================
+
+Timer-bounded classic +test (main z80/8085). Full RESULT blocks:
+z88dk-classic/readme.txt. w=h=60.
+
+Compiler | CPU  | Library | Ticks
+---------|------|---------|----------------
+sccz80   | z80  | math32  | 1_152_093_641  (Jul 2026)
+sccz80   | 8085 | math32  | 1_362_047_666  (Jul 2026)
+80cc     | z80  | math32  | 1_290_571_216  (Jul 2026 remeasure)
+80cc     | 8085 | math32  | 2_672_568_097  (Jul 2026 remeasure)
+sccz80   | 8085 | mbf32   | 1_805_825_674  (Jul 2026)
+
+
+RESULTS (full multi-toolchain archive)
+======================================
 
 1.
 HITECH C CPM V309-15
@@ -147,16 +162,46 @@ time @ 4MHz  = 4991827956 / 4*10^6 = 20 min 48 sec
 Slow speed largely due to float implementation in C.
 
 10.
-Z88DK April 30, 2021
+Z88DK July 19, 2026
 sccz80 / classic c library / math32
-4559 bytes less page zero
+4717 bytes less page zero
 
-cycle count  = 1142045217
-time @ 4MHz  = 1142045217 / 4*10^6 =  4 min 45 sec
+cycle count  = 1152093641
+time @ 4MHz  = 1152093641 / 4*10^6 =  4 min 48 sec
 
 IEEE 32-bit float implementation.
 
 11.
+Z88DK July 19, 2026
+sccz80 / classic c library / 8085 / math32
+6208 bytes less page zero
+
+cycle count  = 1362047666
+time @ 4MHz  = 1362047666 / 4*10^6 =  5 min 41 sec
+
+IEEE 32-bit float implementation (math32_8085).
+
+12.
+Z88DK July 20, 2026
+80cc / classic c library / math32
+5458 bytes less page zero
+
+cycle count  = 1290571216
+time @ 4MHz  = 1290571216 / 4*10^6 =  5 min 23 sec
+
+IEEE 32-bit float implementation.
+
+13.
+Z88DK July 20, 2026
+80cc / classic c library / 8085 / math32
+6873 bytes less page zero
+
+cycle count  = 2672568097
+time @ 4MHz  = 2672568097 / 4*10^6 = 11 min 8 sec
+
+IEEE 32-bit float implementation (math32_8085).
+
+14.
 Z88DK May 3, 2021
 sccz80 / new c library / math16
 2050 bytes less page zero
@@ -166,13 +211,13 @@ time @ 4MHz  =  915024561 / 4*10^6 =  3 min 48 sec
 
 IEEE 16-bit float implementation.
 
-12.
-Z88DK January 5, 2022
+15.
+Z88DK July 19, 2026
 sccz80 / classic c library / 8085 / MBF32
-3457 bytes less page zero
+3397 bytes less page zero
 
-cycle count  = 1806589346
-time @ 4MHz  = 1806589346 / 4*10^6 =  7 min 32 sec
+cycle count  = 1805825674
+time @ 4MHz  = 1805825674 / 4*10^6 =  7 min 31 sec
 
 DISQ.
 HITECH C MSDOS V780pl2
