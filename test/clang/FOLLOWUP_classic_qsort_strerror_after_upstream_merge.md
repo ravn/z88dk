@@ -1,12 +1,18 @@
 # Follow-up: 2 classic clang regressions from the 2026-07-23 upstream merge
 
+**STATUS: BOTH RESOLVED 2026-07-24.**  qsort (#33) and strerror (#32) now PASS
+on the classic clang path; as a bonus the standard 5-arg `bsearch` gap closed
+too (xfail_bsearch retired → `runtime_bsearch`, PASS on classic AND newlib_iy).
+Classic clang suite: 24 PASS / 0 FAIL.  newlib_iy: 23 PASS / 0 FAIL.  See the
+per-item "FIX" notes below.
+
 Merging `upstream/master` (commit `b6ce4aedc6`) into ravn/master brought in new
 library implementations that two ravn llvmz80 classic bridges were built against.
 On the **classic** clib path (`-clib=default`, `-compiler=llvmz80`) two tests
-now fail; **newlib is unaffected** (newlib_iy all green, 22 PASS). Not in the
-production firmware path (rcbios/autoload/CP-NET/cpnos don't use qsort/strerror).
+failed; **newlib was unaffected** (newlib_iy all green). Not in the production
+firmware path (rcbios/autoload/CP-NET/cpnos don't use qsort/strerror).
 
-Nothing here blocks the signed-mod fix, which is done (see
+Nothing here blocked the signed-mod fix, which is done (see
 `BUG_newlib_signed_mod.md`).
 
 **Tracking issues:** qsort → ravn/z88dk **#33**; strerror → ravn/z88dk **#32**
@@ -29,12 +35,22 @@ comparator requirement) was dropped in the merge (took upstream's `stdlib.h`).
 Now `_qsort` links (from `z80_crt0.lib`) but the comparator is invoked with the
 wrong convention → the program runs but produces no/garbage output.
 
-**To fix:** decide how clang-z80 should reach upstream's new qsort. Either
-(a) confirm clang's default `sdcccall(1)` comparator matches `l_cmp_sdcc`'s
-marshalling and add the right `stdlib.h` routing for `__LLVMZ80` (clang emits
-`_qsort`), or (b) add a clang comparator thunk (`l_cmp_clang`/`l_cmp_llvmz80`)
-if the marshalling differs. Then restore/update the `__smallc`-comparator
-contract in `runtime_qsort.c` to whatever the new design needs.
+**FIX (2026-07-24):** route (a).  Two coupled ABI facts, both handled purely in
+`include/stdlib.h` under `#if defined(__LLVMZ80)` — no new asm, no lib rebuild:
+1. **Comparator convention.** The comparator must be `__smallc` (`l_cmp_sdcc`
+   marshals the two operands on the STACK, not in registers).  `runtime_qsort.c`
+   already declared `cmp_asc`/`cmp_desc` `__smallc`; the prototype now types the
+   `compar` parameter as a pointer-to-`__smallc`-function so clang's
+   `-Wincompatible-function-pointer-types` is satisfied.
+2. **Argument order.** clang's `__smallc`/`sdcccall(0)` pushes qsort's four args
+   right-to-left, but the `_qsort` asm entry expects the z88dk left-to-right
+   order (base deepest, compar on top).  Fix: a reversed-argument alias
+   `__qsort_llvmz80(compar,size,nmemb,base)` bound to the existing `_qsort`
+   symbol via an `__asm("qsort")` label (clang re-prepends `_`), plus a macro
+   `#define qsort(base,nmemb,size,compar) __qsort_llvmz80(compar,size,nmemb,base)`
+   that swaps the order back.  Verified `call _qsort` with compar on top.
+`runtime_qsort.c` header rewritten to describe the two facts.  Same treatment
+applied to `bsearch` (`__bsearch_llvmz80` → `_bsearch`, 5 args).
 
 ## 2. runtime_strerror — `__rodata_error_strings_head` not pulled  (#32)
 
@@ -45,12 +61,26 @@ confirmed), but the link fails `undefined symbol: __rodata_error_strings_head`:
 the defining module is not pulled on-demand across the `cpm_clib.lib` →
 `z80_crt0.lib` boundary in the current link order.
 
-**To fix:** ensure `__strerror_table` is pulled — e.g. give upstream's
-`asm_strerror` a reference the linker resolves from the crt lib, move
-`__strerror_table.asm` into `cpm_clib`'s module set, or add an explicit
-`EXTERN`/anchor. Verify against upstream's intended strerror string-table
-mechanism (upstream may now ship its own table that ravn's bridge should defer
-to).
+**FIX (2026-07-24):** the real cause was simpler than "not pulled across a lib
+boundary".  `z88dk-z80nm` showed `__strerror_table` was **not in z80_crt0.lib at
+all** — its `__rodata_error_strings_head` appeared only as an `U` (undefined
+extern from `asm_strerror`), never a `G`.  A stale comment in
+`__strerror_table.asm` claimed the module was pulled via a "buildcrt obj-glob"
+and must NOT be in `llvmz80.lst`; that was wrong — the glob never included it.
+Fix: add `${NEWLIB_ROOT}l/llvmz80/__strerror_table.asm` to
+`libsrc/l/llvmz80.lst` (exactly like the sibling `__divhi3`/`__itoa` bridges,
+which `newlib-z80.lst` pulls into z80_crt0.lib), then rebuild:
+`make -C libsrc TARGETS=z80 clean && make -C libsrc TARGETS=z80 && make -C libsrc
+install`.  No double-inclusion risk: no classic module declares `section
+rodata_error_strings` (so z80asm generates no auto section-start symbol to
+clash), and the clang **newlib** route (`-clib=newlib_iy`, `-nostdlib`) never
+links z80_crt0.lib — it keeps using newlib's own section-start symbol from
+`lib/crt/newlib/clib_rodata.inc`.  Comment in `__strerror_table.asm` corrected.
+
+> NB: `make -C libsrc TARGETS=z80 clean` also wipes the gitignored **newlib**
+> `.lib` artifacts (`libsrc/newlib/lib/{sccz80,sdcc_ix}/*.lib`).  Rebuild them
+> with `make -C libsrc/newlib cpm` afterwards or newlib links fail with
+> `file not found: cpm.lib`.
 
 ## Rebuild notes captured this session (for whoever picks this up)
 

@@ -209,8 +209,30 @@ extern   int optreset;
 // One shared search/sort core.  sccz80 links the bare names (__LIB__), sdcc the
 // _-prefixed ones; each entry embeds its own comparator thunk, so a single
 // classic library serves both compilers (see classic/stdlib/{qsort,bsearch}.asm).
+#if defined(__LLVMZ80)
+// ravn/llvm-z80: clang's __smallc == sdcccall(0) pushes arguments right-to-left,
+// but the shared _qsort/_bsearch library entries expect the z88dk __smallc
+// left-to-right push order (base/key deepest, compar on top -- see
+// classic/stdlib/{qsort,_qsort,bsearch,_bsearch}.asm).  Bind a reversed-argument
+// alias directly to the existing library symbol (via an __asm() label, so no
+// separate bridge module is needed) and swap the order back with a macro so the
+// pushed stack layout matches what the asm entry reads.  The comparator MUST be
+// __smallc: the l_cmp_sdcc thunk marshals its two operands on the stack, not in
+// registers, so a default (sdcccall(1)) comparator would be miscalled.
+extern void  __qsort_llvmz80(int (*compar)(const void *, const void *) __smallc,
+                             unsigned int size, unsigned int nmemb, void *base)
+    __smallc __asm("qsort");
+#define qsort(base, nmemb, size, compar) \
+    __qsort_llvmz80((compar), (size), (nmemb), (base))
+extern void *__bsearch_llvmz80(int (*compar)(const void *, const void *) __smallc,
+                               unsigned int size, unsigned int nmemb, void *base, void *key)
+    __smallc __asm("bsearch");
+#define bsearch(key, base, nmemb, size, compar) \
+    __bsearch_llvmz80((compar), (size), (nmemb), (base), (key))
+#else
 extern void __LIB__   qsort(void *base, unsigned int nmemb, unsigned int size, int (*compar)(const void *, const void *)) __smallc;
 extern void __LIB__  *bsearch(void *key, void *base, unsigned int nmemb, unsigned int size, int (*compar)(const void *, const void *)) __smallc;
+#endif
 
 // l_qsort()/l_bsearch() operate on arrays of 2-byte items (pointers/ints),
 // sharing the one core rather than a separate little implementation.

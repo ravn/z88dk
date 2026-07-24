@@ -34,8 +34,19 @@
 ; to exist and be a valid pointer to the table data; the section it lives in
 ; does not matter for correctness.
 ;
-; This module is included via the buildcrt glob (classic/z80_crt0s/obj/z80/**),
-; NOT via llvmz80.lst, to avoid double-inclusion.
+; This module is listed in libsrc/l/llvmz80.lst so it is assembled into the
+; CLASSIC crt library z80_crt0.lib (llvmz80.lst is pulled by
+; classic/z80_crt0s/newlib-z80.lst, which feeds z80_crt0.lib).  It is pulled
+; on demand: asm_strerror (in cpm_clib) leaves __rodata_error_strings_head
+; undefined, and the linker resolves it from this module.  There is no
+; double-inclusion risk: no classic module declares "section
+; rodata_error_strings", so z80asm generates no auto section-start symbol to
+; clash with; and the clang NEWLIB CP/M route (-clib=newlib_iy) links with
+; -nostdlib and never links z80_crt0.lib, so it keeps using newlib's own
+; section-start symbol from lib/crt/newlib/clib_rodata.inc.  (An earlier comment
+; here claimed this file was pulled via a buildcrt obj-glob and must NOT be in
+; llvmz80.lst; that was wrong -- z80nm showed the module never reached the lib,
+; which is exactly the strerror link failure this fixes.)
 SECTION code_l_clang
 
 PUBLIC __rodata_error_strings_head

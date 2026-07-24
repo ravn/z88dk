@@ -110,7 +110,6 @@ newlib_skip_reason() {
     # -compiler=llvmz80) after Phase C landed the compiler.h __LLVMZ80 mapping.
     case "$1" in
         runtime_printf_ieee.sh) echo "classic stdio.h -D__LLVMZ80_IEEE_PRINTF route; newlib %f is separate (plan Phase D)"; return 0 ;;
-        xfail_bsearch.sh)       echo "newlib ships standard bsearch; the missing-bsearch gap is classic-only"; return 0 ;;
         runtime_file.sh)        echo "FILE* does not link on newlib (undefined asm_target_open_p1/p2)"; return 0 ;;
         # (The clang integer-helper libcalls __mulhi3/__divsi3/__divmodsi4/...
         # are now provided on the newlib route by llvmz80_imath.lib -- see

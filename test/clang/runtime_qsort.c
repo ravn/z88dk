@@ -1,21 +1,23 @@
 /* Runtime regression test for qsort with a clang/llvmz80 comparator.
  *
- * INSIGHT UNDER TEST (z88dk maintainer's "annotate the callback" approach):
- *   z88dk's qsort_sdcc_callee invokes the user comparator with sdcccall(0)
- *   semantics -- arguments on the stack ([SP+2]=a, [SP+4]=b) and the int
- *   result read from HL (see libsrc/classic/stdlib/qsort_sdcc_callee.asm).
- *   A DEFAULT clang comparator instead takes a in HL, b in DE and returns in
- *   DE, which qsort_sdcc cannot invoke -> the sort scrambles the array.
+ * INSIGHT UNDER TEST (two coupled ABI facts, both handled in <stdlib.h>):
+ *   1. The comparator convention.  Upstream's shared sort core reaches the
+ *      user comparator through a per-compiler thunk; for clang that is
+ *      l_cmp_sdcc (libsrc/classic/stdlib/_qsort.asm), which marshals the two
+ *      operands on the STACK, not in registers.  So the comparator must be
+ *      __smallc (== __attribute__((sdcccall(0))) for clang, a no-op for
+ *      sccz80/sdcc).  A default (sdcccall(1)) comparator would take a in HL /
+ *      b in DE and be miscalled -> the sort scrambles the array.
+ *   2. The argument order.  clang's __smallc/sdcccall(0) pushes qsort's own
+ *      four arguments right-to-left, but the _qsort asm entry expects the
+ *      z88dk __smallc left-to-right order (base deepest, compar on top).  So
+ *      <stdlib.h> binds a reversed-argument alias (__qsort_llvmz80, __asm-
+ *      labelled to the existing _qsort library symbol) and swaps the order
+ *      back with a macro.  No runtime trampoline or global state is needed;
+ *      the sort stays reentrant.
  *
- *   Declaring the comparator __smallc (== __attribute__((sdcccall(0))) for
- *   clang, a no-op for sccz80/sdcc) makes clang compile it to read a/b from
- *   the stack and return in HL -- exactly qsort_sdcc's callback protocol.
- *   No runtime trampoline or global state is needed; the sort is reentrant.
- *   <stdlib.h>'s qsort() macro supplies the matching inline call-order swapper
- *   for the four qsort arguments (the __ZPROTO4 mechanism).
- *
- * RED (pre-insight): an unannotated comparator -> array left unsorted/garbage.
- * GREEN: __smallc comparator -> array fully sorted.
+ * RED (either fact wrong): array left unsorted/garbage.
+ * GREEN: __smallc comparator + reversed-alias qsort macro -> array fully sorted.
  *
  * A larger dataset (N=200 pseudo-random ints from a deterministic 16-bit LCG)
  * exercises the callback thousands of times through the quicksort recursion in
