@@ -109,8 +109,8 @@ newlib_skip_reason() {
     # Genuine gaps that remain on the SANCTIONED newlib route (newlib_iy/_ix,
     # -compiler=llvmz80) after Phase C landed the compiler.h __LLVMZ80 mapping.
     case "$1" in
-        runtime_printf_ieee.sh) echo "classic stdio.h -D__LLVMZ80_IEEE_PRINTF route; newlib %f is separate (plan Phase D)"; return 0 ;;
-        runtime_file.sh)        echo "FILE* does not link on newlib (undefined asm_target_open_p1/p2)"; return 0 ;;
+        runtime_printf_ieee.sh) echo "newlib %f drops clang IEEE-754 double; no __LLVMZ80_IEEE_PRINTF route for newlib stdio (plan Phase D, ravn/z88dk #35)"; return 0 ;;
+        runtime_file.sh)        echo "FILE* does not link on newlib: CP/M target has no file-open driver (undefined asm_target_open_p1/p2, ravn/z88dk #34)"; return 0 ;;
         # (The clang integer-helper libcalls __mulhi3/__divsi3/__divmodsi4/...
         # are now provided on the newlib route by llvmz80_imath.lib -- see
         # libsrc/l/llvmz80/newlib/ -- so runtime_qsort/intdiv/long PASS.)
