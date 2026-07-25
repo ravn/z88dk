@@ -634,7 +634,32 @@ extern char *tmpnam_ex_fastcall(char *template) __z88dk_fastcall;
 #endif
 
 
+#endif
 
+
+#if defined(__LLVMZ80) && defined(__LLVMZ80_IEEE_PRINTF)
+/* ravn/llvm-z80: opt-in transparent IEEE-754 printf on the NEWLIB CP/M target
+ * (ravn/z88dk #35).  Mirrors the classic <stdio.h> route: define
+ * __LLVMZ80_IEEE_PRINTF and stock printf/fprintf/sprintf/snprintf route through
+ * the nanoprintf-backed shim, so plain printf("%f", x) prints correct IEEE
+ * binary64 -- z88dk's own newlib printf cannot format clang's IEEE-754 double.
+ * (Placed OUTSIDE the #ifdef __ZXNEXT block above -- that region is skipped on
+ * the CP/M target, which is why an earlier placement never activated.)
+ *
+ * The shim is compiled against the NEWLIB headers and shipped in
+ * libsrc/l/llvmz80/newlib/llvmz80_printf_newlib.lib (linked by the newlib_iy/
+ * newlib_ix CLIB BEFORE the softfloat archive so the archive's classic
+ * _sgoioblk-baked shim is not pulled); the f64 arithmetic cores come from
+ * softfloat_cpm_z80.lib (LLVMZ80RTLIB, auto-linked for any -compiler=llvmz80).
+ * Integer-only programs set neither macro and are unaffected. */
+extern int __llvmz80_printf(const char *fmt, ...);
+extern int __llvmz80_fprintf(FILE *f, const char *fmt, ...);
+extern int __llvmz80_sprintf(char *s, const char *fmt, ...);
+extern int __llvmz80_snprintf(char *s, size_t n, const char *fmt, ...);
+#define printf   __llvmz80_printf
+#define fprintf  __llvmz80_fprintf
+#define sprintf  __llvmz80_sprintf
+#define snprintf __llvmz80_snprintf
 #endif
 
 #endif

@@ -109,11 +109,13 @@ newlib_skip_reason() {
     # Genuine gaps that remain on the SANCTIONED newlib route (newlib_iy/_ix,
     # -compiler=llvmz80) after Phase C landed the compiler.h __LLVMZ80 mapping.
     case "$1" in
-        runtime_printf_ieee.sh) echo "newlib %f drops clang IEEE-754 double; no __LLVMZ80_IEEE_PRINTF route for newlib stdio (plan Phase D, ravn/z88dk #35)"; return 0 ;;
         runtime_file.sh)        echo "FILE* does not link on newlib: CP/M target has no file-open driver (undefined asm_target_open_p1/p2, ravn/z88dk #34)"; return 0 ;;
         # (The clang integer-helper libcalls __mulhi3/__divsi3/__divmodsi4/...
         # are now provided on the newlib route by llvmz80_imath.lib -- see
-        # libsrc/l/llvmz80/newlib/ -- so runtime_qsort/intdiv/long PASS.)
+        # libsrc/l/llvmz80/newlib/ -- so runtime_qsort/intdiv/long PASS.
+        #  runtime_printf_ieee now PASSES on newlib too: the __LLVMZ80_IEEE_PRINTF
+        #  route is wired into the newlib _DEVELOPMENT stdio.h + the
+        #  llvmz80_printf_newlib.lib shim -- ravn/z88dk #35.)
     esac
     # The UNSUPPORTED sdcc_iy/sdcc_ix override forces -compiler=sdcc, so a
     # z88dk-ucpp -D__SDCC pass runs first and chokes on source-level __smallc /
