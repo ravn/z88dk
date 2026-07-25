@@ -67,6 +67,12 @@ register except IX. Audited (2026-07-23): no public newlib entry leaks IX
 - **Disk `FILE*` I/O** does not link on newlib (`asm_target_open` unimplemented
   tree-wide — ravn/z88dk #34, upstream z88dk/z88dk#3022): unsupported for now,
   use the classic clib for CP/M file I/O.
+- **`<math.h>` / libm** — `<math.h>` fails to compile under llvmz80 (its
+  `_FLOAT16_T` block typedefs `_Float16`, a reserved clang keyword unsupported on
+  z80) AND, even guarded, newlib libm does not link (`_sqrt_fastcall` uses
+  newlib's native float format, not clang IEEE-754 `double`; some compiler-rt
+  float libcalls absent). Known gap — ravn/z88dk #37. clang doubles use the
+  softfloat closure (`LLVMZ80RTLIB`) + `mathf64`, not newlib math.
 
 ## Verification recipe (re-run to re-confirm any claim)
 
