@@ -1,40 +1,14 @@
 ; itoa / ltoa / ultoa bridges for ravn/llvm-z80 clang.
 ;
-; WHY THIS FILE EXISTS
-;   These are non-standard but widely used conversion functions.  z88dk
-;   exports `asm_itoa`, `asm_ltoa`, `asm_ultoa` (the register-ABI workers)
-;   but has no `___itoa` / `___ltoa` / `___ultoa` adapters for the llvmz80
-;   register calling convention.  Without them, any program calling itoa/ltoa/
-;   ultoa fails to link with "undefined symbol: ___itoa".
+; z88dk ships asm_itoa/asm_ltoa/asm_ultoa (register workers) but no
+; ___itoa/___ltoa/___ultoa adapters for clang -> link fails without these.
 ;
-; ARG ORDERING — the key detail
-;   z88dk stdlib.h declares these via __ZPROTO3 which, for llvmz80, REVERSES
-;   the argument order for the low-level entry point:
-;
-;     itoa(num, buf, radix) -> __itoa(radix, buf, num)  [i.e. ___itoa]
-;
-;   So clang generates (verified 2026-07-21 from zcc -S output):
-;
-;     ld hl, num    ; push num (arg3 reversed = stacked)
-;     push hl
-;     ld hl, radix  ; HL = radix  (arg1 reversed = first register arg)
-;     ld de, buf    ; DE = buf    (arg2 = second register arg)
-;     call ___itoa
-;
-;   For ltoa/ultoa, num is long (32-bit); clang pushes num_hi first (deepest)
-;   then num_lo (nearest top, just above ret_addr):
-;
-;     ld hl, num_hi; push hl   ; deepest
-;     ld hl, num_lo; push hl   ; nearest top
-;     ld hl, radix
-;     ld de, buf
-;     call ___ltoa
-;
-; CALLING CONVENTION (ravn/llvm-z80 sdcccall(1)):
-;   return 16-bit: in DE (callee-cleans stacked args)
-;   asm_itoa:  HL=num, BC=radix, DE=buf  (per z88dk libsrc/stdlib/z80/asm_itoa.asm)
-;   asm_ltoa:  DE=num_hi, HL=num_lo, IX=buf, BC=radix
-;   asm_ultoa: same layout as asm_ltoa
+; stdlib.h declares them via __ZPROTO3, which REVERSES arg order for the
+; low-level entry: itoa(num,buf,radix) -> ___itoa(radix, buf, num), so clang
+; passes radix=HL, buf=DE, num stacked (ltoa/ultoa: 32-bit num, hi pushed
+; deepest). Return in DE (sdcccall(1), callee-cleans). Worker ABIs:
+;   asm_itoa : HL=num, BC=radix, DE=buf
+;   asm_ltoa / asm_ultoa : DE=num_hi, HL=num_lo, IX=buf, BC=radix
 
 SECTION code_l_clang
 

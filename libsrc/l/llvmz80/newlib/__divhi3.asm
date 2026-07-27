@@ -1,45 +1,21 @@
-; NEWLIB copy of ../__divhi3.asm (byte-identical body; the 16-bit bridge needs
-; no config_private.inc).  Built into llvmz80_imath.lib and pulled on demand by
-; the -clib=newlib_ix / newlib_iy link (see build_imath_lib.sh).  The
-; l_*_16_16x16 cores it EXTERNs are already bundled in the newlib archive, so no
-; classic clib is required.  Keep in sync with the parent if the clang HImode
-; ABI ever changes.
+; NEWLIB copy of ../__divhi3.asm (identical body; no config_private.inc needed).
+; Built into llvmz80_imath.lib, pulled on demand by -clib=newlib_ix/newlib_iy;
+; the l_*_16_16x16 cores are bundled in the newlib archive. Keep in sync with
+; the parent if the clang HImode ABI changes.
 ;
 ; compiler-rt-named 16-bit integer helpers for ravn/llvm-z80 clang.
 ;
-; WHY THIS FILE EXISTS
-;   ravn/llvm-z80's Z80 backend emits standard LLVM libcall (libgcc/
-;   compiler-rt) names for the integer runtime ops it cannot inline:
-;   __divhi3 / __modhi3 / __udivhi3 / __umodhi3 / __mulhi3 (HImode == 16-bit;
-;   hard-coded in Z80InstructionSelector.cpp).  z88dk's own l/clang runtime
-;   instead shipped SDCC-style wrapper names (__sdivs, __srems, __smulu, ...),
-;   so NONE of the compiler-rt names resolved -- e.g. `e.c: undefined symbol:
-;   ___divhi3` the moment a program did a 16-bit divide.  These wrappers close
-;   that gap by exporting the names the compiler actually calls.
+; The backend emits libgcc/compiler-rt names for the 16-bit integer ops it
+; can't inline (__divhi3/__modhi3/__udivhi3/__umodhi3/__mulhi3, hard-coded in
+; Z80InstructionSelector.cpp). z88dk's l/clang shipped SDCC-style names instead,
+; so none resolved. These wrappers export the names clang actually calls.
 ;
-; ABI (verified against this clang, 2026-07-10, by disassembling a real call
-; site in divtest.c and cross-checking `keep(a,b){opaque();return a+b;}`):
-;   * arguments:   arg1 in HL, arg2 in DE.
-;   * RETURN VALUE IN DE  (not HL!).  At the call site clang does
-;     `ld hl,(a); call ___divhi3; ld (result),de` -- it reads the result out
-;     of DE.  `keep` likewise ends `add hl,de; ex de,hl; ret`, returning in DE.
-;   * no callee-saved general registers: `keep` spills both HL (stack) and DE
-;     (bss) across an opaque call, so HL/DE/BC/AF are all caller-saved.  IX/IY
-;     are reserved and the cores never touch them.
-;
-; The z88dk small integer cores (selected here via __CLIB_OPT_IMATH=0) take
-; exactly (HL=arg1, DE=arg2) already, but return the PRIMARY result in HL:
-;   l_divs_16_16x16 :  hl = quotient , de = remainder   (signed)
-;   l_divu_16_16x16 :  hl = quotient , de = remainder   (unsigned)
-;   l_mulu_16_16x16 :  hl = product                     (low 16 bits)
-; Since clang wants the result in DE, the quotient/product wrappers move HL->DE
-; with `ex de,hl`; the modulo wrappers need no fixup because the remainder is
-; already in DE, so they tail-call.  (Low-16 multiply is sign-agnostic, so the
-; unsigned mul core serves __mulhi3.)
-;
-; Worked example (divtest.c, a=4200 in HL, b=7 in DE):
-;   __divhi3 -> core: hl=600 (quot), de=0 (rem); ex de,hl -> DE=600  => 4200/7=600
-;   __modhi3 -> core: hl=600, de=0;              (no swap)   DE=0     => 4200%7=0
+; clang ABI (sdcccall(1)): arg1=HL, arg2=DE; RETURN in DE (not HL); HL/DE/BC/AF
+; caller-saved, IX/IY reserved. The z88dk cores take (HL,DE) but return the
+; primary result in HL:
+;   l_divs_16_16x16 / l_divu_16_16x16 : hl=quotient, de=remainder
+;   l_mulu_16_16x16 : hl=product (low 16, sign-agnostic -> serves __mulhi3)
+; So quotient/product wrappers do `ex de,hl`; modulo wrappers tail-call.
 
 SECTION code_l_clang
 

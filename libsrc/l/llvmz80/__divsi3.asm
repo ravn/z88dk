@@ -1,40 +1,18 @@
 
 ; ravn/llvm-z80 compiler-rt 32-bit integer division/remainder helpers.
 ;
-; The llvm-z80 backend emits calls to the compiler-rt names __divsi3 /
-; __modsi3 / __udivsi3 / __umodsi3 for 32-bit `long` divide/modulo.  z88dk
-; already ships the optimized cores l_div[su]_32_32x32; these thin bridges
-; adapt the llvm-z80 runtime ABI to the core ABI and share the single core.
+; The backend calls __divsi3/__modsi3/__udivsi3/__umodsi3 for 32-bit `long`
+; divide/modulo. z88dk ships the cores l_div[su]_32_32x32; these bridges adapt
+; clang's ABI to the core ABI.
 ;
-; ---- llvm-z80 runtime ABI (verified by disassembling `long add2(long a,long b)
-;      { return a+b; }` and `long dv(long,long){return a/b;}` under
-;      `zcc +cpm -compiler=llvmz80 -O2`) ----
-;   32-bit values live in registers as HL:DE with HL = HIGH word, DE = LOW word
-;   (this is the OPPOSITE half-order of the z88dk core's DE:HL layout).
-;   enter: HL:DE     = arg1 = dividend a   (HL=bits16..31, DE=bits0..15)
-;          stack     = ret, b_lo, b_hi     = arg2 = divisor b (little-endian)
-;          IX        = caller frame pointer, MUST be preserved
-;   exit : HL:DE     = result (quotient for div, remainder for mod)
-;          caller cleans the 2 pushed divisor words (`pop af; pop af`), so this
-;          routine must NOT consume them off the stack.
+;   clang ABI : 32-bit in HL:DE (HL=high, DE=low). enter HL:DE=dividend a,
+;               divisor b pushed (b_lo, b_hi, caller-cleaned), IX=frame ptr
+;               (preserve). exit HL:DE=result.
+;   core ABI  : DE:HL layout (DE=high, HL=low); dehl = dehl'/dehl,
+;               dehl'=dehl'%dehl (dividend in alt bank, divisor in main).
 ;
-; ---- core ABI (libsrc/math/integer/l_divs_32_32x32.asm) ----
-;   compute: dehl  = dehl' / dehl,  dehl' = dehl' % dehl
-;   core 32-bit layout is DE:HL with DE = HIGH word, HL = LOW word.
-;   dividend in the ALTERNATE bank dehl', divisor in the MAIN bank dehl;
-;   quotient returned in main dehl, remainder in alternate dehl'.
-;   alters: af, bc, de, hl, bc', de', hl', ix.
-;
-; The llvm-z80 HL:DE layout is the byte-swap of the core's DE:HL layout, so a
-; single `ex de,hl` converts between them (applied to the dividend on the way
-; in and to the result on the way out).
-;
-; Worked example a=1000000 (0x000F4240), b=7:
-;   entry HL=0x000F (hi), DE=0x4240 (lo). `ex de,hl` -> DE=0x000F,HL=0x4240
-;   (core layout). `exx` -> dehl' = dividend. Divisor b_lo=0x0007 at (ix+4),
-;   b_hi=0x0000 at (ix+6) -> main HL=0x0007,DE=0x0000 = core divisor 7.
-;   Core -> main dehl = 142857 (0x0002:0x2E49), alt dehl' = 1 (remainder).
-;   `ex de,hl` -> HL=0x0002,DE=0x2E49 = llvm-z80 quotient 142857.
+; clang's HL:DE is the half-swap of the core's DE:HL, so one `ex de,hl`
+; converts each way (dividend in, result out).
 
 INCLUDE "config_private.inc"
 
@@ -128,28 +106,15 @@ ___umodsi3:
 
 ; ---- fused divmod (quotient in registers, remainder via caller pointer) ----
 ;
-; ABI (verified by disassembling `long f(long a,long b){return a/b + a%b;}` under
-;      `zcc +cpm -compiler=llvmz80 -O2`, 2026-07-14):
 ;   quotient = __[u]divmodsi4(long dividend, long divisor, long *rem_slot)
-;   enter: HL:DE           = dividend a   (HL = HIGH word, DE = LOW word)
-;          stack (from ret) = b_lo, b_hi, &rem_slot   (little-endian words)
-;          IX               = caller frame ptr, MUST be preserved
-;   exit : HL:DE           = quotient     (HL = HIGH word, DE = LOW word)
-;          *rem_slot        = remainder (4 bytes, little-endian)
-;          caller cleans the 3 pushed words (`pop af; pop af; pop af`).
+;   enter: HL:DE = dividend (HL=high, DE=low); stack = b_lo, b_hi, &rem_slot
+;          (caller-cleaned); IX = frame ptr (preserve).
+;   exit : HL:DE = quotient; *rem_slot = 4-byte little-endian remainder.
 ;
-; The z88dk core computes quotient AND remainder in one pass:
-;   l_div[su]_32_32x32:  main dehl = quotient, alternate dehl' = remainder
-;   (core layout DE:HL = DE HIGH word, HL LOW word; the llvm-z80 HL:DE layout is
-;    the byte-swap, so a single `ex de,hl` converts between them).
-; The core TRASHES IX, so &rem_slot is read while the entry IX is still valid,
-; stashed on the stack across the core call, then popped back into IX (IX/IY are
-; bank-independent, unlike BC/DE/HL) so the remainder -- which the core leaves in
-; the ALTERNATE bank -- can be stored after a single `exx` brings it to main.
-;
-; Worked example a=1000000 (0x000F4240), b=7:
-;   quotient 142857 (0x0002:0x2E49) returned in HL:DE; remainder 1 stored at
-;   *rem_slot as 01 00 00 00.
+; The core computes both in one pass (main dehl=quotient, alt dehl'=remainder;
+; DE:HL layout, so `ex de,hl` converts to/from clang's HL:DE). The core trashes
+; IX, so &rem_slot is read while IX is valid, stashed across the core call, then
+; restored to store the remainder (brought to main bank via `exx`).
 
 ___divmodsi4:
    ex de,hl                     ; dividend HL:DE -> core DE:HL (into alt bank)
