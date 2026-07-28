@@ -109,7 +109,15 @@ newlib_skip_reason() {
     # Genuine gaps that remain on the SANCTIONED newlib route (newlib_iy/_ix,
     # -compiler=llvmz80) after Phase C landed the compiler.h __LLVMZ80 mapping.
     case "$1" in
-        runtime_file.sh)        echo "newlib disk FILE* UNSUPPORTED: asm_target_open hook unimplemented tree-wide (newlib 'last mile', z88dk/z88dk#1426); use classic clib for CP/M files -- ravn/z88dk #34 (wontfix)"; return 0 ;;
+        runtime_file.sh)         echo "newlib CP/M FILE* not supported (asm_target_open_p1/p2 missing -- ravn/z88dk#34 WONTFIX)"; return 0 ;;
+        runtime_fileio_fmt.sh)   echo "newlib CP/M FILE* not supported (ravn/z88dk#34 WONTFIX)"; return 0 ;;
+        runtime_fileio_rw.sh)    echo "newlib CP/M FILE* not supported (ravn/z88dk#34 WONTFIX)"; return 0 ;;
+        runtime_fileio_seek.sh)  echo "newlib CP/M FILE* not supported (ravn/z88dk#34 WONTFIX)"; return 0 ;;
+        runtime_fileio_eof.sh)   echo "newlib CP/M FILE* not supported (ravn/z88dk#34 WONTFIX)"; return 0 ;;
+        runtime_fileio_null.sh)  echo "newlib CP/M FILE* not supported (ravn/z88dk#34 WONTFIX)"; return 0 ;;
+        runtime_fileio_multi.sh) echo "newlib CP/M FILE* not supported (ravn/z88dk#34 WONTFIX)"; return 0 ;;
+        runtime_fileio_remove.sh)echo "newlib CP/M FILE* not supported (ravn/z88dk#34 WONTFIX)"; return 0 ;;
+        runtime_fileio_rename.sh)echo "newlib CP/M FILE* not supported (ravn/z88dk#34 WONTFIX)"; return 0 ;;
         # (The clang integer-helper libcalls __mulhi3/__divsi3/__divmodsi4/...
         # are now provided on the newlib route by llvmz80_imath.lib -- see
         # libsrc/l/llvmz80/newlib/ -- so runtime_qsort/intdiv/long PASS.

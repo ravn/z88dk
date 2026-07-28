@@ -1,13 +1,13 @@
 #!/bin/sh
-# Oracle-based runtime test: stdio FILE* text round-trip (fopen/fputs/fgets).
-# See runtime_file.c for the C source.
+# Oracle-based runtime test: fprintf / fscanf round-trip through a CP/M file.
+# See runtime_fileio_fmt.c for the full description.
 #
-# GREEN (classic): sccz80 and llvmz80 both produce "file=[hello file 123]"
-# XFAIL (newlib):  fails to link (asm_target_open_p1/p2 missing -- ravn/z88dk#34 WONTFIX)
-# XFAIL (classic, llvmz80): if output differs from oracle, gap is noted
+# GREEN (classic): sccz80 and llvmz80 both produce "fmt[42][hello]"
+# XFAIL (newlib):  fails to link -- ravn/z88dk#34 (WONTFIX)
+# XFAIL (classic, llvmz80): if output differs from sccz80 oracle, gap is noted
 set -e
 DIR=$(cd "$(dirname "$0")" && pwd)
-SRC="$DIR/runtime_file.c"
+SRC="$DIR/runtime_fileio_fmt.c"
 
 command -v zcc >/dev/null 2>&1 || { echo "SKIP: zcc not on PATH"; exit 0; }
 NTVCM=${NTVCM:-ntvcm}
@@ -16,14 +16,9 @@ command -v "$NTVCM" >/dev/null 2>&1 || { echo "SKIP: ntvcm not found (set NTVCM)
 WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 fail() { echo "FAIL: $1"; exit 1; }
 HEAP="-pragma-define:CLIB_MALLOC_HEAP_SIZE=4000"
-# Cycle limit for each ntvcm run.  Prevents hangs from infinite loops.
-# 10M cycles is >> what a small CP/M file-I/O program needs.  Overridable.
 NTVCM_MAXCYC=${NTVCM_MAXCYC:-10}
-# ntvcm -m:X prints "ntvcm: cycle limit N reached" to stdout on expiry;
-# strip that line so it does not pollute the oracle/test comparison.
 ntvcm_run() { "$NTVCM" -m:"$NTVCM_MAXCYC" "$@" 2>/dev/null | grep -v "^ntvcm: cycle limit"; }
 
-# -- oracle: sccz80, classic clib --
 mkdir -p "$WORK/odir"
 if ! zcc +cpm -O2 $HEAP -create-app -o "$WORK/odir/oracle" "$SRC" \
         >"$WORK/o.log" 2>&1; then
@@ -31,7 +26,6 @@ if ! zcc +cpm -O2 $HEAP -create-app -o "$WORK/odir/oracle" "$SRC" \
 fi
 EXPECTED=$(cd "$WORK/odir" && ntvcm_run oracle.com | tr -d '\r') || true
 
-# -- under test: llvmz80 --
 mkdir -p "$WORK/rtdir"
 if ! zcc +cpm -compiler=llvmz80 ${ZCC_CLIB:-} -O2 $HEAP \
         -create-app -o "$WORK/rtdir/rt" "$SRC" >"$WORK/rt.log" 2>&1; then
@@ -43,7 +37,7 @@ fi
 ACTUAL=$(cd "$WORK/rtdir" && ntvcm_run rt.com | tr -d '\r') || true
 
 if [ "$ACTUAL" = "$EXPECTED" ]; then
-    echo "PASS: fopen/fputs/fgets text round-trip (got [$ACTUAL])"
+    echo "PASS: fprintf/fscanf round-trip (got [$ACTUAL])"
 else
-    echo "XFAIL: FILE* text output differs from sccz80 oracle. got=[$ACTUAL] want=[$EXPECTED]"
+    echo "XFAIL: fprintf/fscanf output differs from sccz80 oracle. got=[$ACTUAL] want=[$EXPECTED]"
 fi
