@@ -41,6 +41,22 @@ That correction is what started this investigation: make `double` 32-bit
 cores, and only fall back to the 64-bit closure where 32-bit precision
 genuinely isn't enough.
 
+**Open question, not yet done (asked 2026-08-01): can `-lm` be made to run
+64-bit `double`, without any z88dk code?** Answer: not via `-lm` itself —
+`-lm` is a *link-time* flag, but `double`'s width (`DoubleWidth` in
+`Z80TargetInfo`, `clang/lib/Basic/Targets/Z80.cpp`) is baked into the
+object code at *compile* time (which libcall name/argument size gets
+emitted). No link flag can retroactively turn an already-compiled 32-bit
+`__addsf3` call into a 64-bit `__adddf3` call. What *would* work, and
+*would* need no z88dk code: a new compile-time flag (e.g. `-mllvm
+-z80-double64`) that switches `DoubleWidth`/`DoubleFormat` to 64-bit
+IEEEdouble at compile time and links against the existing self-contained
+`llvmz80-softfloat` closure (Berkeley SoftFloat + compiler-rt shims, see
+above) instead of math32 — that closure already works standalone and
+needs nothing from z88dk. This has not been designed or implemented; it
+is a plausible future opt-in mode, parked here as a note, not a task in
+progress.
+
 ## 1. Why this bridge exists
 
 clang (ravn/llvm-z80) makes `double`/`long double` **32-bit IEEE-754 binary32**
