@@ -59,6 +59,7 @@ PUBLIC ___cmpsf2
 PUBLIC ___gtsf2
 PUBLIC ___gesf2
 PUBLIC ___unordsf2
+PUBLIC ___cmpsf2_fast
 
 EXTERN m32_compare
 
@@ -184,4 +185,35 @@ ___unordsf2:
     ret
 .unordsf2_yes
     ld hl,1
+    ret
+
+; ___cmpsf2_fast: sdcccall(0) fast-math tri-state compare, NO NaN check.
+;
+; Emitted (Z80LegalizerInfo.cpp's hasAllFastFlags/"Fast" path) only when
+; clang's fcmp carries all three fast-math flags (nnan+ninf+nsz) -- i.e.
+; only under `-ffast-math` or an explicit fast-math attribute. A plain
+; fcmp never emits this; it always uses ___cmpsf2/__gtsf2/__gesf2 above.
+;
+; Same entry stack shape as ___cmpsf2 (single `call` from clang: left @
+; SP+2, right @ SP+6, own retaddr @ SP+0), same body as ___cmpsf2's
+; ordinary path, just without the two CheckNaN calls: nnan tells the
+; compiler NaN cannot occur here, and m32_compare itself already has no
+; NaN awareness (see its own header + this file's intro comment) -- so
+; skipping the check is a correct match, not a behaviour change, under
+; the flag's contract.
+;
+; Measured 2026-08-01 (MATH32_BRIDGE.md Sec 5): this removes ~327
+; T-states/call versus ___cmpsf2 (946 -> ~619 T-states/call, matching
+; m32_compare's own raw cost).
+___cmpsf2_fast:
+    call m32_compare
+    jr z,cmpsf2_fast_eq
+    jr c,cmpsf2_fast_lt
+    ld hl,1
+    ret
+.cmpsf2_fast_lt
+    ld hl,$FFFF
+    ret
+.cmpsf2_fast_eq
+    ld hl,0
     ret
