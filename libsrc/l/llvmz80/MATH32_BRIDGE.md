@@ -97,6 +97,32 @@ compiler's own code (Path A, no z88dk needed), the other is a thin
 translator that lets the compiler reuse z88dk's existing math32 code
 (Path B, lives in z88dk).
 
+**Important: `-lm` vs `--math32` picks the IMPLEMENTATION, not the WIDTH.**
+It would be easy to assume `-lm` (plain link against the default C runtime,
+no z88dk math library) gives you a "normal" 64-bit `double` and `--math32`
+gives you the smaller 32-bit one. **That is not the decision being made
+here, and it is not true.** `double`/`long double` being 32-bit IEEE-754
+binary32 is set unconditionally in `Z80TargetInfo`
+(`clang/lib/Basic/Targets/Z80.cpp`, `DoubleWidth = 32`) — it applies to
+*every* build of this compiler, regardless of which link flag you pass.
+There is no 64-bit `double` mode to opt in or out of via `-lm`/`--math32`
+(64-bit soft-float is a wholly separate, self-contained closure,
+`llvmz80-softfloat`, not selected by a link flag at all — see §0).
+
+What `-lm` vs `--math32` (or rather, `-mllvm -z80-float-sdcccall0 -lmath32`)
+actually decides is **which of the two float-runtime implementations from
+§1a your 32-bit floats run on**:
+- Plain link, no z88dk float library selected -> Path A, compiler-rt's own
+  binary32 code (`compiler-rt/lib/builtins/z80/*.asm` in llvm-z80).
+- `-mllvm -z80-float-sdcccall0` (plus linking z88dk's math32, e.g. via the
+  `--math32` alias or `-lmath32`) -> Path B, this bridge, into z88dk's
+  math32 core.
+Get this wrong and you link a mismatched pair (e.g. math32 object files
+without the ABI flag, or the ABI flag without linking math32) — that's a
+**link/runtime bug** (wrong calling convention or missing symbol), not a
+different floating-point precision. The precision (32-bit binary32) is the
+same either way; only which hand-written assembly executes it changes.
+
 ## 2. Data format: IEEE-754 binary32 on both sides (verified identical)
 
 **Question that came up mid-investigation: is the on-the-wire bit
