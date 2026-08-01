@@ -56,6 +56,47 @@ this directory (`__addsf3.asm`, `__cmpsf2.asm`, `__floatsisf.asm`) make clang's
 libcalls resolve straight into math32's own cores, at (for most ops) **zero
 runtime cost beyond math32's own execution** — see §5.
 
+## 1a. In plain language: why does this bridge live in z88dk, not llvm-z80?
+
+Short answer: **there are two separate float code paths, and only one of
+them needs anything from z88dk.**
+
+- **Path A — default ABI.** clang ships its own complete, self-contained
+  IEEE-754 binary32 float library as part of the compiler
+  (`compiler-rt/lib/builtins/z80/*.asm` in the llvm-z80 repo — `__addsf3`,
+  `__cmpsf2`, `__cmpsf2_fast`, etc.). This is compiler-rt's own
+  implementation, written from scratch for Z80. It works completely on its
+  own; z88dk contributes nothing to it and doesn't need to know it exists.
+  This is the same thing every LLVM target does — ship a runtime library
+  alongside the compiler for the arithmetic the CPU can't do in hardware.
+
+- **Path B — `-mllvm -z80-float-sdcccall0` (opt-in).** Here we deliberately
+  *don't* use compiler-rt's own float code. Instead we redirect clang's
+  libcalls into z88dk's existing **math32** library
+  (`libsrc/math/float/math32/`), because math32 is smaller/faster on real
+  Z80 hardware than compiler-rt's generic version (see §5 for the numbers).
+  But math32 wasn't written for compiler-rt's calling convention or its
+  return-value contract (e.g. compare needs a -1/0/+1 tri-state result,
+  math32 gives a Z/C flag pair) — so a handful of small glue files are
+  needed to translate between the two. *That* glue is the "bridge", and it
+  lives in z88dk (`libsrc/l/llvmz80/`) because it's fundamentally about
+  z88dk's own math32 internals (`m32_compare` and friends) — the compiler
+  side of the contract is just "call this symbol name", nothing math32-
+  specific leaks into llvm-z80.
+
+Could the linker instead be told to pull a compiler-rt-shaped library
+straight out of llvm-z80? Yes — and that's exactly what already happens
+for Path A. But for Path B specifically that would mean either
+duplicating math32's float format/logic a second time inside the
+compiler (double maintenance, risk of the two drifting apart), or having
+llvm-z80's own runtime archive reach into z88dk's internal math32 API by
+name — which breaks the rule that the compiler should build and test
+without knowing anything z88dk-specific. So: same IEEE-754 binary32
+*format* either way, but two different *implementations* — one is the
+compiler's own code (Path A, no z88dk needed), the other is a thin
+translator that lets the compiler reuse z88dk's existing math32 code
+(Path B, lives in z88dk).
+
 ## 2. Data format: IEEE-754 binary32 on both sides (verified identical)
 
 **Question that came up mid-investigation: is the on-the-wire bit
