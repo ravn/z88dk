@@ -7,11 +7,16 @@
 ;
 ; ABI (ravn/llvm-z80, since the Z80LegalizerInfo.cpp change tracked by #277):
 ; these four libcalls are emitted with CallingConv::Z80_SDCCCall0 (clang's
-; sdcccall(0)) rather than the general C ABI -- see
-; llvm/test/CodeGen/Z80/issue-277-f32-libcall-sdcccall0.ll.  sdcccall(0) pushes
-; BOTH 32-bit operands on the stack, in declared order (so the second-declared
-; operand is on top, closest to the return address), and returns the 32-bit
-; result in DE:HL (D=MSB).
+; sdcccall(0)) rather than the general C ABI, WHEN the compiler is invoked
+; with `-mllvm -z80-float-sdcccall0` -- see
+; llvm/test/CodeGen/Z80/issue-277-f32-libcall-sdcccall0.ll.  The flag is
+; opt-in (default OFF) because the ELF/standalone `--target=z80` path has its
+; OWN compiler-rt float runtime, written for the default C ABI; z88dk's zcc
+; must pass this flag for `-compiler=llvmz80` builds, or this bridge will
+; link fine but silently compute garbage (every operand read from the wrong
+; place).  sdcccall(0) pushes BOTH 32-bit operands on the stack, in declared
+; order (so the second-declared operand is on top, closest to the return
+; address), and returns the 32-bit result in DE:HL (D=MSB).
 ;
 ; z88dk math32 already ships wrappers for exactly this convention --
 ; libsrc/math/float/math32/c/sdcc/cm32_sdcc_fsadd.asm (+ fssub/fsmul/fsdiv) --

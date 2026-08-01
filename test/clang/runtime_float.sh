@@ -15,11 +15,14 @@
 #
 # This test needs `-lmath32` (z88dk's math32 IEEE-754 binary32 library) added
 # explicitly at link time, since it is not part of the default classic clib
-# link set. It also needs a clang build with the Z80_SDCCCall0 calling
-# convention for the f32 arithmetic libcalls (see
-# llvm/test/CodeGen/Z80/issue-277-f32-libcall-sdcccall0.ll in llvm-z80) --
-# without that compiler-side change, this bridge (a pure alias, no glue code)
-# will link but will NOT compute the right answers.
+# link set. It also needs `-mllvm -z80-float-sdcccall0` (the compiler-side
+# switch to CallingConv::Z80_SDCCCall0 for the f32 arithmetic libcalls is
+# gated behind this opt-in flag, default OFF, because the ELF/standalone
+# `--target=z80` path's own compiler-rt float runtime expects the default C
+# ABI -- see llvm/test/CodeGen/Z80/issue-277-f32-libcall-sdcccall0.ll in
+# llvm-z80). Without the flag, this bridge (a pure alias, no glue code) will
+# link but will NOT compute the right answers -- every case in
+# runtime_float.c fails with garbage bit patterns.
 #
 # Usage: ZCCCFG=<z88dk>/lib/config PATH=<z88dk>/bin:$PATH \
 #        NTVCM=/path/to/ntvcm ./runtime_float.sh
@@ -40,6 +43,7 @@ trap 'rm -rf "$WORK"' EXIT
 fail() { echo "FAIL: $1"; exit 1; }
 
 if ! zcc +cpm -compiler=llvmz80 ${ZCC_CLIB:-} -O2 -create-app \
+	-mllvm -z80-float-sdcccall0 \
 	-L"$MATH32_DIR" -lmath32 \
 	-o "$WORK/rt" "$BRIDGE" "$SRC" >"$WORK/build.log" 2>&1; then
 	echo "--- build log ---"; cat "$WORK/build.log"
