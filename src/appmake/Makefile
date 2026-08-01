@@ -14,11 +14,17 @@ CC			?= gcc
 CFLAGS		+= -Wall -std=gnu11 -MMD -pedantic -I../common
 INSTALL 	?= install
 
-# Skip the TI-83+ target (ti8xk) — requires GMP which is not available
-# on macOS without brew/MacPorts and is not needed for RC700.  Local
-# patch; revert these two lines if you ever re-enable ti8xk.
+# The TI-83+ target (ti8xk) needs GMP. Default assumes GMP is installed
+# (as CI does via libgmp-dev/brew gmp/mingw-w64-gmp) and links against it,
+# matching pre-2026-06-01 behaviour. Pass NO_GMP=1 to build without GMP
+# (e.g. macOS without brew/MacPorts) -- this drops ti8xk support.
+ifdef NO_GMP
 CFLAGS      += -DNO_GMP
 SRCS        := $(filter-out ti8xk.c,$(wildcard *.c)) ../common/dirname.c
+else
+LDFLAGS     += -lgmp
+SRCS        := $(wildcard *.c) ../common/dirname.c
+endif
 
 OBJS_ALL	:= $(SRCS:.c=.o)
 OBJS		:= $(OBJS_ALL:$(PROJ).o=)
