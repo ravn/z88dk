@@ -339,6 +339,14 @@ extern uint __LIB__  isqrt(uint n);
 #ifndef __STDC_ABI_ONLY
 extern uint __LIB__  isqrt_fastcall(uint n) __z88dk_fastcall;
 #define isqrt(x) isqrt_fastcall(x)
+#elif defined(__LLVMZ80)
+/* ravn/llvm-z80: route isqrt to isqrt_fastcall for the register ABI
+ * (z80_fastcall = HL in/out, matching asm_isqrt).  Without this, clang's
+ * default sdcccall(1) register-passes n but isqrt.asm pops it off the
+ * stack (smallc convention) -- isqrt() then always returns 45.  See abs
+ * above for the established pattern. */
+extern uint __LIB__  isqrt_fastcall(uint n) __z88dk_fastcall;
+#define isqrt(x) isqrt_fastcall(x)
 #endif
 
 
@@ -434,7 +442,13 @@ extern unsigned long __LIB__   extract_bits_callee(unsigned char *data, unsigned
 __ZPROTO2(int,,wcmatch,char,*wildname,char *,filename)
 
 // Convert a BCD encoded value to unsigned int
-extern unsigned int __LIB__ unbcd(unsigned int value);
+// unbcd.c is __naked asm that pops its argument off the stack (smallc
+// convention); __smallc makes clang pass it that way too (sdcccall(0)).
+// It is a no-op for sccz80/SDCC (their own native calling-convention
+// keyword, already their default), matching the pattern used unconditionally
+// on extract_bits above.  Without it, llvmz80's default sdcccall(1)
+// register-passes the arg and unbcd() always returns 0.
+extern unsigned int __LIB__ unbcd(unsigned int value) __smallc;
 
 #ifdef __Z88__
 extern int system(const char *text);              /* should this be in the z88 library? */
