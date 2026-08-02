@@ -63,7 +63,7 @@ int main(int argc, char *argv[])
 {
     int  res = 0;
 
-    sbrk(50000, 10000);
+    sbrk((void *)50000, 10000);
 
     res += suite_genmath();
 

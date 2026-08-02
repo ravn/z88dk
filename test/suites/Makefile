@@ -13,6 +13,14 @@ ifeq ($(COMPILER),80cc)
 SUBDIRS += long_ir debuginfo
 endif
 
+# ravn/llvm-z80 (compiler=llvmz80) does not support far pointers, so the far
+# suite (sbrk_far/*_far) has no way to build under it -- exclude it here,
+# following the existing per-compiler SUBDIRS convention above (80cc opts
+# INTO extra suites; llvmz80 opts OUT of one it cannot support).
+ifeq ($(COMPILER),llvmz80)
+SUBDIRS := $(filter-out far,$(SUBDIRS))
+endif
+
 
 all: subdirs-all
 
