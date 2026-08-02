@@ -33,13 +33,53 @@
 
 typedef int mode_t;
 
+#if defined(__LLVMZ80)
+/* clang/llvmz80: the target/test fcntl workers (open/read/write) are plain
+ * stack-based smallc routines that read their three 16-bit args left-to-right
+ * from the stack -- name at [sp+6] (deepest), flags at [sp+4], mode at [sp+2]
+ * -- exactly the frame sccz80's __smallc produces. All three asm labels
+ * (open/_open/___open) alias this ONE worker; there is no real register
+ * bridge. __ZPROTO3's clang branch declares the reversed-arg ___open entry
+ * with the DEFAULT convention (sdcccall(1): HL=1st, DE=2nd, stack=3rd), which
+ * the stack worker does not honour -> garbage (open->245/fd=-1). Plain
+ * __smallc on open() would push right-to-left, landing name at [sp+2] instead
+ * of [sp+6] -> still wrong (fd=-1). The fix mirrors __ZPROTO3's own idiom
+ * (reversed-arg entry + inline forwarder) but pins the entry to __smallc:
+ * sdcccall(0) pushes the reversed params (mode,flags,name) right-to-left, so
+ * name lands deepest at [sp+6] and the unmodified worker reads it correctly.
+ * No asm change needed. */
+extern int __LIB__ __open(mode_t mode, int flags, const char *name) __smallc;
+__attribute__((always_inline)) __attribute__((overloadable))
+__attribute__((enable_if(1, "")))
+static inline int open(const char *name, int flags, mode_t mode) {
+    return __open(mode, flags, name);
+}
+#else
 __ZPROTO3(int,,open,const char *,name, int, flags, mode_t, mode)
+#endif
 __ZPROTO2(int,,creat,const char *,name,mode_t, mode)
 
 extern int __LIB__ close(int fd);
 
+#if defined(__LLVMZ80)
+/* Same rationale as open() above: reversed-arg __smallc entry so the
+ * unmodified stack workers see name/fd at [sp+6]. */
+extern ssize_t __LIB__ __read(size_t len, void *ptr, int fd) __smallc;
+__attribute__((always_inline)) __attribute__((overloadable))
+__attribute__((enable_if(1, "")))
+static inline ssize_t read(int fd, void *ptr, size_t len) {
+    return __read(len, ptr, fd);
+}
+extern ssize_t __LIB__ __write(size_t len, void *ptr, int fd) __smallc;
+__attribute__((always_inline)) __attribute__((overloadable))
+__attribute__((enable_if(1, "")))
+static inline ssize_t write(int fd, void *ptr, size_t len) {
+    return __write(len, ptr, fd);
+}
+#else
 __ZPROTO3(ssize_t,,read,int,fd,void *,ptr,size_t,len)
 __ZPROTO3(ssize_t,,write,int,fd,void *,ptr,size_t,len)
+#endif
 
 #ifndef __STDC_ABI_ONLY
 extern long __LIB__ __SAVEFRAME__ lseek(int fd,long posn, int whence) __smallc;
