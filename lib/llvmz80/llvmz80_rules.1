@@ -75,6 +75,20 @@
 	GLOBAL	%1
 
 ;; --- data emission ---
+;; .asciz has an implicit trailing NUL (C string); plain .ascii does not (used
+;; by clang for non-NUL-terminated byte arrays, e.g. `const unsigned char
+;; font[2048] = {...}` -- confirmed via `--target=z80 -S` on a >=2-byte const
+;; array, which clang always emits as `.ascii "...octal-escaped..."` rather
+;; than a `.byte` list).  DEFM alone (no trailing DEFB 0x00) is the correct
+;; translation; z80asm's DEFM accepts the same octal/backslash escapes clang
+;; emits (verified: `DEFM "\000\001\002\003"` assembles clean).  Without this
+;; rule .ascii fell through to the "unhandled directive" default and z80asm
+;; rejected it with "syntax error" at the .ascii line -- see
+;; ravn/z88dk issue (font296/SEM702 flip-test build, 2026-08-02).
+	.ascii	%1
+=
+	DEFM	%1
+
 	.asciz	%1
 =
 	DEFM	%1

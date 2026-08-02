@@ -123,9 +123,33 @@ extern void __LIB__ *z80_indr_callee(void *dst,uint8_t port,uint8_t num) __small
 #define z80_indr(a,b,c) z80_indr_callee(a,b,c)
 
 
+#if defined(__LLVMZ80)
+/* Same ABI-mismatch class as bdos()/bdosh() (see cpm.h), PLUS a second,
+ * distinct issue: z80_outp_callee.asm pops "af = data" (top of stack) then
+ * "hl = port" (deeper) -- i.e. it expects port pushed first/deepest, data
+ * pushed last/topmost -- but clang's sdcccall(0) push order for a natural
+ * (uint16_t port, uint8_t data) declaration puts data on top / port deeper,
+ * backwards from what the worker pops. Reversing the declared C parameter
+ * order fixes the ordering, matching the bdos() fix.
+ * The SECOND, independent bug: the classic worker always reserves a full
+ * 2-byte stack slot per argument -- even for a uint8_t -- because sccz80
+ * itself never narrows stack pushes. clang, given a uint8_t parameter,
+ * narrows to a single-byte push (`ld a,66 / push af / inc sp`), so the
+ * worker's `pop bc` (meant to consume the 2-byte data slot) ends up
+ * consuming one byte of the port value too, corrupting the stack and
+ * hanging the program (reproduced: z88dk-ticks ran to the full tick budget
+ * with a uint8_t data param; widening to uint16_t fixed it, matching the
+ * classic build's tick count of 18334 vs 18337). Fix: declare the reversed
+ * low-level prototype's data parameter as uint16_t (not uint8_t) so clang
+ * always pushes a full 2-byte slot, matching the worker's fixed-width
+ * stack layout. */
+extern void __LIB__ __z80_outp_llvmz80(uint16_t data,uint16_t port) __asm__("z80_outp_callee") __smallc __z88dk_callee;
+#define z80_outp(a,b) __z80_outp_llvmz80(b,a)
+#else
 extern void __LIB__ z80_outp(uint16_t port,uint8_t data) __smallc;
 extern void __LIB__ z80_outp_callee(uint16_t port,uint8_t data) __smallc __z88dk_callee;
 #define z80_outp(a,b) z80_outp_callee(a,b)
+#endif
 
 
 extern void __LIB__ *z80_otir(void *src,uint8_t port,uint8_t num) __smallc;
