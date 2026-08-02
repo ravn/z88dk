@@ -93,7 +93,52 @@ cp libsrc/z80_crt0.lib lib/clibs/z80_crt0.lib                       # sync
 - Verify clang's mangled symbol name with `clang --target=z80 -S` before choosing the
   asm `PUBLIC` (compiler-rt helpers get 3 leading underscores, e.g. `___mulsi3`).
 
-## GROUP B — NOT FIXED. Root cause now EVIDENCED (was previously a guess). Plan below.
+## GROUP B — FIXED 2026-08-02 (root cause confirmed at asm level, oracle-verified, ~29 suites re-run clean)
+
+### Root cause (confirmed, not just hypothesis)
+`include/setjmp.h` declared `l_setjmp`/`l_longjmp` with NO calling-convention
+attribute (`__LIB__` only). `libsrc/setjmp/c/l_setjmp.asm`/`l_longjmp.asm`
+implement the classic z88dk stack-based convention (pointer arg popped off the
+stack, int return placed in **HL**) — exactly `__smallc` (sdcccall(0)).
+Without the attribute, llvmz80/clang falls back to its **default sdcccall(1)**
+convention, which reads a 16-bit return from **DE**. `clang --target=z80 -S`
+on a minimal `l_setjmp` call site confirmed clang tail-calls with the arg in
+HL (matching by luck) but would read the return in DE — DE holds garbage
+(whatever was last there), so `setjmp()` appeared non-zero on the direct call.
+This is why `test/framework/test.c:54`'s `if (setjmp(jmpbuf)==0)` always took
+the else branch → "(in setup)" on ~every suite.
+
+### Fix
+`include/setjmp.h`: added `__smallc` to both `l_setjmp` and `l_longjmp`
+declarations (removed the now-redundant `__stdc` on `l_longjmp`, which is a
+no-op for clang anyway). `__smallc` is a no-op/native keyword for sccz80 and
+SDCC (already their default), so this only changes llvmz80 codegen — no
+observable effect on the other two compilers.
+
+### Verification (red-green, oracle-based)
+- New `test/clang/runtime_setjmp.{c,sh}`: asserts `A_SETJMP0` printed (setjmp
+  returned 0 on direct call), `B_AFTER_LONGJMP stage=1` (longjmp resumed
+  correctly with side effects visible), `C_DONE` reached, and `UNREACHABLE`
+  NEVER printed (i.e. longjmp actually transferred control, didn't fall
+  through). Confirmed **RED** on the pre-fix header (`git stash` round-trip:
+  got `B_AFTER_LONGJMP stage=0` / `C_DONE`, exactly matching the P2 probe from
+  earlier in this session) and **GREEN** after the fix.
+- Re-ran all ~29 llvmz80-relevant `test/suites/*` (the full `SUBDIRS` list in
+  `test/suites/Makefile` minus `far`, which llvmz80 can't support): **zero
+  "(in setup)" failures remain** (`grep -c "(in setup)" run.log` → 0). 58
+  test-groups now report clean `N run, N passed, 0 failed`.
+- 9 test-groups now report genuine per-assertion failures with real line
+  numbers/messages instead of blanket "(in setup)" — proof the framework's
+  setjmp-based dispatch is now working correctly, not proof of new bugs:
+  `stdlib/isqrt` (isqrt.c, wrong integer sqrt for many inputs),
+  `string/stricmp`+`strrstr`+`strlcpy`, `stdlib/unbcd`, `md5/md5sum` (wrong
+  hash), `recordbench` (struct-pointer field-churn checksum mismatch). These
+  are SEPARATE, PRE-EXISTING functional bugs in those specific library
+  routines/programs under llvmz80 — newly VISIBLE now that setjmp works, not
+  caused by this fix. Out of scope for Group B; candidate "Group C" if the
+  user wants them investigated next (report-first, same discipline).
+
+## GROUP B — (superseded) original plan, kept for history
 
 ### Evidence (2026-08-02 probes, llvmz80 classic, ntvcm)
 - P1 `printf` → **WORKS** (`HELLO_PRINTF`).
