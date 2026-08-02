@@ -133,6 +133,13 @@ extern void __LIB__  srand(unsigned int seed);
 #ifndef __STDC_ABI_ONLY
 extern void __LIB__  srand_fastcall(unsigned int seed) __z88dk_fastcall;
 #define srand(x) srand_fastcall(x)
+#elif defined(__LLVMZ80)
+/* ravn/llvm-z80: route srand to srand_fastcall for the register ABI (z80_fastcall
+ * = HL in, matching asm_srand). Verified: srand(42) then rand() gave a different
+ * value than srand_fastcall(42) then rand() -- the plain entry's `pop` reads
+ * garbage off the stack instead of the register-passed seed. See abs above. */
+extern void __LIB__  srand_fastcall(unsigned int seed) __z88dk_fastcall;
+#define srand(x) srand_fastcall(x)
 #endif
 
 // Not sure why Rex has it's own rand() routine using different seed?
@@ -366,6 +373,14 @@ extern unsigned int  __LIB__  inp(unsigned int port);
 #ifndef __STDC_ABI_ONLY
 extern unsigned int  __LIB__  inp_fastcall(unsigned int port) __z88dk_fastcall;
 #define inp(p) inp_fastcall(p)
+#elif defined(__LLVMZ80)
+/* ravn/llvm-z80: route inp to inp_fastcall for the register ABI (z80_fastcall
+ * = HL in/out, matching asm_inp). inp.asm's plain entry does `pop de; pop hl`
+ * expecting a stack-passed port, but llvmz80 passes port in HL only (verified
+ * via -S: `ld hl,<port> / call _inp`, no stack push) -- the pop corrupts HL
+ * with whatever is below the return address. See abs above. */
+extern unsigned int  __LIB__  inp_fastcall(unsigned int port) __z88dk_fastcall;
+#define inp(p) inp_fastcall(p)
 #endif
 
 __ZPROTO2(void,,outp,unsigned int,port,unsigned int,byte)
@@ -410,10 +425,24 @@ extern int __LIB__ __SAVEFRAME__     sleep (int secs);
 #ifndef __STDC_ABI_ONLY
 extern int __LIB__ __SAVEFRAME__     sleep_fastcall (int secs) __z88dk_fastcall;
 #define sleep(x) sleep_fastcall(x)
+#elif defined(__LLVMZ80)
+/* ravn/llvm-z80: route sleep to sleep_fastcall for the register ABI
+ * (z80_fastcall = HL in, matching asm_sleep). Same class as inp above: the
+ * plain entry pops a stack-passed arg that llvmz80 never pushes (verified
+ * via -S: `ld hl,<secs> / call _sleep`, no stack push). */
+extern int __LIB__ __SAVEFRAME__     sleep_fastcall (int secs) __z88dk_fastcall;
+#define sleep(x) sleep_fastcall(x)
 #endif
 
 extern void __LIB__ msleep(unsigned int milliseconds);
 #ifndef __STDC_ABI_ONLY
+extern int __LIB__  msleep_fastcall (unsigned int milliseconds) __z88dk_fastcall;
+#define msleep(x) msleep_fastcall(x)
+#elif defined(__LLVMZ80)
+/* ravn/llvm-z80: route msleep to msleep_fastcall for the register ABI
+ * (z80_fastcall = HL in, matching asm_z80_delay_ms). Same class as inp/sleep
+ * above (verified via -S: `ld hl,<ms> / call _msleep`, no stack push, but
+ * msleep.asm's plain entry does `pop de; pop hl`). */
 extern int __LIB__  msleep_fastcall (unsigned int milliseconds) __z88dk_fastcall;
 #define msleep(x) msleep_fastcall(x)
 #endif
