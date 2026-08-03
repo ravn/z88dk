@@ -32,7 +32,7 @@ figure was individual test binaries). All commits local only (no push/PR).
 Key measured fact: **under z88dk `+test`/genmath, clang-z80 `double` is 4 bytes**
 (32-bit), not the 8-byte IEEE double it uses elsewhere. Verified with a probe.
 
-## OPEN — 2 suites blocked (regex, target_io); math GREEN via XFAIL (#278)
+## OPEN — 1 suite blocked (target_io: plan ready); regex FILED #39; math GREEN via XFAIL (#278)
 
 1. **math** — GREEN under llvmz80 (via XFAIL). `test_math32`: **16 run,
    14 passed, 0 failed, 2 xfail** (runtest exits 0). sdcc/sccz80 stay 16/16.
@@ -60,20 +60,43 @@ Key measured fact: **under z88dk `+test`/genmath, clang-z80 `double` is 4 bytes*
    `e84b32907e`) so the suite is green; an XPASS will signal #278 is fixed and
    the marker should be removed.
 
-2. **regex** — CONFIRMED miscompile of z88dk's regexp library under clang-z80.
-   `regexec` prints `regexp(3): corrupted program` (its magic-byte sanity
-   check on the compiled program fails). Source `libsrc/regex/` (regcomp/
-   regexec). Repro: `test/suites/regex`, case `abracadabra$` vs
-   `abracadabracadabra`. Needs root-cause: library-source portability vs
-   backend codegen bug -> fix + ravn issue. Per `feedback_explain_before_filing`
-   get user go-ahead before filing.
+2. **regex** — ROOT-CAUSED + FILED as **ravn/z88dk#39** (2026-08-03). NOT a
+   backend miscompile: it is the stack-ABI-vs-register-ABI class (#22/#26/fcntl).
+   `include/regexp.h` declares `regexec`/`regsub` `__smallc` (stack) for native,
+   but under clang routes them via `__ZPROTO2`/`__ZPROTO3` (reversed-arg, DEFAULT
+   sdcccall(1) register convention). The library object `regex/obj/z80/cimpl/
+   regexp.o` is the sccz80-built `__smallc` STACK worker, and `test.map` shows
+   `___regexec = _regexec = $175E` (clang's symbol is a bare alias of the stack
+   worker, NO register->stack bridge). Call-site asm confirms clang passes
+   HL=string, DE=prog in REGISTERS (`jp ___regexec`); the stack worker reads args
+   off the stack -> garbage `prog` -> `prog->program[0] != MAGIC (0234)` ->
+   `regerror("corrupted program")`. `regcomp` is 1-arg -> immune (compiles fine,
+   only matching fails). Passes sccz80+sdcc, fails only llvmz80. Fix direction
+   (not done): reversed-arg `__smallc` header entries a la the fcntl md5sum fix.
 
-3. **target_io** — CONFIRMED fd-layer ABI failure under llvmz80. `fcntl_native.c`
-   `tio_write->write()` returns wrong count (io_tests.c:75), `tio_open->open()`
-   O_RDONLY returns fd<0 (:88). Likely `__z88dk_callee` / HL-vs-DE return-ABI
-   bridge gap for open/creat/write/read/lseek under `+test`, same family as the
-   md5sum fd-layer fix (include/fcntl.h `e8612ac2e4`). Needs per-function ABI
-   verification + bridge fixes.
+3. **target_io** — RE-INVESTIGATED THOROUGHLY 2026-08-03; PLAN in
+   `tasks/plan-target_io-llvmz80-2026-08-03.md`. Three verified findings:
+   (a) **Recipe is RED for ALL compilers** (harness bug, not compiler): sccz80
+       passes 8/8 yet `make test_cpm_z80.com` still errors, because z88dk-ticks
+       returns exit 1 for a `+cpm` warm-boot exit and the recipe's `|| exit 1`
+       trusts it. (Other suites are green only via the `+test -b msx` `runtest`
+       path, which halts cleanly.)
+   (b) **llvmz80 open() = REGRESSION** from the md5sum `include/fcntl.h`
+       `__LLVMZ80` fix over-reaching into +cpm (it was validated for +test STACK
+       workers only). VERIFIED: gating the fcntl.h branch to
+       `#if defined(__LLVMZ80) && !defined(__CPM)` keeps md5 (+test) GREEN and
+       un-regresses +cpm open() (failure then moves :88 open -> :92 read).
+       `__CPM` is defined under +cpm, not +test (confirmed via emitted-asm
+       marker) = valid discriminator.
+   (c) **write/read wrong count** = HL-vs-DE return-register + arg ABI of the
+       sccz80-built cpm_clib = ALREADY FILED **ravn/z88dk#23** (umbrella #26).
+       Do NOT file a dup. Deep (full register-ABI bridges), not header-only.
+   REJECTED shortcut: switching cpm_z80 to `+test -b msx` host-fcntl does NOT run
+   CP/M (it uses ticks host SYSCALLs, not BDOS) -> would be a false green.
+   PLAN (awaiting go-ahead): Step1 harness output-parse gate (parse suite's
+   "0 failed" summary instead of trusting ticks exit); Step2 gate fcntl.h to
+   `!__CPM` (un-regress open, small); Step3 XFAIL residual +cpm disk tests under
+   llvmz80 ref #23 (XFAIL framework already in test/framework/test.{c,h}).
 
 ## Suites verified GREEN under llvmz80 (24 of 31)
 
