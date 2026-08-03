@@ -406,11 +406,24 @@ int suite_math()
     suite_add_test(test_float_arithmetic);
     suite_add_test(test_reciprocal);
     suite_add_test(test_sqrt);
+#if defined(__LLVMZ80)
+    /* pow/fmod: BLOCKED on ravn/llvm-z80#278 -- clang's sdcccall(0) reverses
+     * multi-argument stack order vs SDCC, so the non-commutative 2-arg Math32
+     * cores receive swapped operands. Expected-fail until the backend is fixed;
+     * an XPASS here signals #278 is resolved and the marker should be removed. */
+    suite_add_xfail_test(test_pow);
+#ifndef MATH16
+    suite_add_xfail_test(test_fmod);
+    suite_add_test(test_fmin);
+    suite_add_test(test_fmax);
+#endif
+#else
     suite_add_test(test_pow);
 #ifndef MATH16
     suite_add_test(test_fmod);
     suite_add_test(test_fmin);
     suite_add_test(test_fmax);
+#endif
 #endif
     return suite_run();
 }
