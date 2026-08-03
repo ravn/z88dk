@@ -42,7 +42,7 @@ fi
 OUT=$("$NTVCM" -m:80 "$WORK/rt.com" 2>/dev/null | tr -d '\r')
 
 echo "$OUT" | grep -qF "A_SETJMP0" || fail "setjmp() did not return 0 on direct call. got: [$OUT]"
-echo "$OUT" | grep -qF "B_AFTER_LONGJMP stage=1" || fail "longjmp() did not resume correctly. got: [$OUT]"
+echo "$OUT" | grep -qF "B_AFTER_LONGJMP stage=1 rv=7 vloc=111" || fail "longjmp() did not resume correctly (expected stage=1 rv=7 vloc=111). got: [$OUT]"
 echo "$OUT" | grep -qF "C_DONE" || fail "control flow did not reach after the if/else. got: [$OUT]"
 echo "$OUT" | grep -qF "UNREACHABLE" && fail "longjmp() did not actually jump (fell through). got: [$OUT]"
 
