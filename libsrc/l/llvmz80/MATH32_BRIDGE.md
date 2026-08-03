@@ -464,3 +464,72 @@ speedup on the math32 bridge side.
   correctness suite for these bridges (the last one for `___cmpsf2_fast`).
 - `z88dk/test/clang/bench_math32_vs_compilerrt.sh` — reproducibly
   regenerates the §5/§5a performance tables from scratch.
+
+## 7. z88dk's own `test/suites/math` under `-compiler=llvmz80` (2026-08-03)
+
+z88dk ships a math test-suite (`test/suites/math`) that builds
+`test_math32.bin` — the IEEE-754 binary32 variant — with, verbatim:
+
+    -DMATH32 -D__MATH_MATH32 -fp-mode=ieee ... -lmath32
+
+Two independent things stood between that target and a green run under the
+llvmz80 backend; only the first was a driver bug we fixed, the second is a
+test-wiring gap that is **not** a compiler/bridge defect.
+
+### 7a. Driver fix: zcc no longer forwards `-fp-mode` to clang (FIXED)
+
+`-fp-mode=<x>` is an **sccz80/sdcc** double-format selector
+(`src/sccz80/main.c`: `fp-mode=ieee` -> 32-bit IEEE, `fp-mode=z80` -> 48-bit,
+`mbf32`, …). It is *not* a zcc driver option, and zcc forwards any flag it
+does not recognise straight to the C compiler
+(`parse_cmdline_arg` -> `add_option_to_compiler` -> `comparg`). So the
+llvmz80 clang driver received it and aborted:
+
+    clang: error: unknown argument: '-fp-mode=ieee'
+
+On the suite's command line the flag even appears *before* `-compiler=llvmz80`,
+so it is already in `comparg` by the time the compiler is known — filtering at
+parse time is unreliable.
+
+Fix (commit `ef85518d3e`, `src/zcc/zcc.c`): after `configure_compiler()`
+resolves `compiler_type == CC_LLVMZ80`, a new helper `strip_flag_prefix()`
+removes any `-fp-mode*` token from `comparg`. clang-z80 is IEEE-754-only, so
+`-fp-mode=ieee` is a no-op for it and any other `-fp-mode=<x>` is unsupported;
+dropping it is correct. The helper matches only at whitespace/token
+boundaries, so a `-fp-mode` substring embedded in a path is left alone.
+
+Verified: `zcc +cpm -compiler=llvmz80 -fp-mode=ieee` now compiles with output
+**byte-identical** to the no-flag build (confirming the no-op); `sccz80` still
+honours `-fp-mode` (the strip runs only in the llvmz80 branch); llvmz80
+without `-fp-mode` is unchanged.
+
+### 7b. Remaining gap: the stock target links no clang float32 runtime (NOT fixed)
+
+With the flag consumed, `test_math32.bin` compiles and then fails at the
+**link** stage with undefined `sf` compiler-rt symbols
+(`___addsf3`, `___subsf3`, `___mulsf3`, `___divsf3`, `___cmpsf2`, `___gesf2`,
+`___unordsf2`, `___fixsfsi`, …).
+
+This is expected and is a property of the *test as written*, not a bug in
+the compiler or in this bridge. clang emits standard-ABI `sf` libcalls for
+`float`, and the suite links only z88dk's `-lmath32` (whose entry points are
+`cm32_*`, not the compiler-rt names). Resolving those libcalls under llvmz80
+needs **one** of the two paths this document describes, and the stock target
+wires up neither:
+
+- **Path B — the math32 bridge (§3/§4):** add `-mllvm -z80-float-sdcccall0`
+  so clang's `sf` calls use the sdcccall(0) ABI, and link the bridge aliases
+  in this directory (`__addsf3.asm`, `__cmpsf2.asm`, `__floatsisf.asm`) on top
+  of `-lmath32`. This is the light path and the one whose correctness is
+  proven by `test/clang/runtime_float|fcmp|fconv.sh`.
+- **Path A — the softfloat closure:** link the `llvmz80-softfloat`
+  archive (Berkeley SoftFloat + compiler-rt shims incl. `src/sf32.c`), which
+  defines the `sf` symbols directly. Heavier; see §0.
+
+Making `test/suites/math`'s `test_math32.bin` link+run under llvmz80 is
+therefore a **test-harness change** (teach that one target to add the Path-B
+ABI flag + bridge objects for `-compiler=llvmz80`), tracked separately from
+the driver fix above. Note also that at time of writing the `llvmz80-softfloat`
+Path-A archive did not rebuild cleanly (its f64 closure driver pulled
+unresolved f32 wrappers) — an independent issue in that repo, unrelated to
+either the zcc fix or this bridge.
