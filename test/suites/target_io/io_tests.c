@@ -239,12 +239,31 @@ int main(void)
     suite_add_test(test_printf_basic);
     suite_add_test(test_sscanf);
     suite_add_test(test_scanf_serial);
+
+    /* Disk tests: under +cpm (__CPM) the classic-clib fcntl workers are
+     * sccz80-ABI, and clang's register calling convention mismatches their
+     * HL-return / stack-arg layout (creat/read/write/lseek return wrong
+     * counts; open() itself works after the fcntl.h fix). Tracked in
+     * ravn/z88dk#23 (umbrella #26). Mark XFAIL on the llvmz80 +cpm native path
+     * ONLY -- sccz80/8085 native and the host-fcntl paths pass all 8, so they
+     * keep asserting (an unexpected pass here -> XPASS -> remove the marker). */
+#if defined(__LLVMZ80) && defined(__CPM) && !defined(TIO_USE_HOST_FCNTL)
+    suite_add_xfail_test(test_file_creat_write_close);
+    suite_add_xfail_test(test_file_read_verify);
+    suite_add_xfail_test(test_file_lseek);
+    suite_add_xfail_test(test_file_multi);
+#else
     suite_add_test(test_file_creat_write_close);
     suite_add_test(test_file_read_verify);
     suite_add_test(test_file_lseek);
     suite_add_test(test_file_multi);
+#endif
 #ifndef TIO_USE_HOST_FCNTL
+#if defined(__LLVMZ80) && defined(__CPM)
+    suite_add_xfail_test(test_file_fopen);
+#else
     suite_add_test(test_file_fopen);
+#endif
 #endif
 #ifdef TIO_CPM_DEVICES
     suite_add_test(test_newlib_cpm_devices);

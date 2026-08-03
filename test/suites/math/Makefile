@@ -26,7 +26,7 @@ MATH32_BRIDGES = $(LLVMZ80_LIBDIR)/__addsf3.asm $(LLVMZ80_LIBDIR)/__cmpsf2.asm $
 MATH32_FLAGS   = -mllvm -z80-float-sdcccall0
 endif
 
-all: test_genmath.bin test_daimath32.bin test_bbcmath.bin test_math16.bin test_math16_8085.bin \
+ALL_TARGETS = test_genmath.bin test_daimath32.bin test_bbcmath.bin test_math16.bin test_math16_8085.bin \
 	test_math32.bin test_math32_z180.bin test_math32_z80n.bin \
 	test_math32_r2ka.bin test_math32_r4k.bin test_math32_kc160.bin \
 	test_math32_8085.bin \
@@ -34,6 +34,21 @@ all: test_genmath.bin test_daimath32.bin test_bbcmath.bin test_math16.bin test_m
 	test_mbf32.bin test_mbf32_8080.bin test_mbf32_8085.bin test_mbf32_gbz80.bin \
 	test_mbf32_r2ka.bin test_mbf32_r4k.bin test_mbf32_ez80_z80.bin test_mbf32_kc160.bin \
 	test_9511.bin test_9511_8085.bin test_fixmath.bin
+
+# clang / -compiler=llvmz80 is a z80-only backend emitting IEEE-754 binary32
+# for `float`; of all formats this suite exercises only Math32 (z80) shares
+# that representation AND the z80 ISA (see the MATH32_BRIDGES comment above).
+# Genmath/MBF32/BBC/CPC/math16/math48/9511/fix16 use encodings clang cannot
+# target, and the z180/z80n/r2ka/r4k/kc160/8085 Math32 variants target other
+# CPUs. Build ONLY the Math32 z80 primary under llvmz80 -- mirroring the
+# per-compiler suite opt-out for far/zx in ../Makefile and the target_io `all`
+# gate. (Building `all` otherwise fails first on test_genmath: undefined
+# ___subsf3/___cmpsf2/_fabs float libcalls the genmath 48-bit lib lacks.)
+ifeq ($(COMPILER),llvmz80)
+ALL_TARGETS = test_math32.bin
+endif
+
+all: $(ALL_TARGETS)
 
 test_fixmath.bin: $(FIXSOURCES)
 	$(call compile, -DFIX16 -DMATH_LIBRARY="\"\\\"fix16\\\"\"", -lm)
