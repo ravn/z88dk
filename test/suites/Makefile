@@ -17,8 +17,16 @@ endif
 # suite (sbrk_far/*_far) has no way to build under it -- exclude it here,
 # following the existing per-compiler SUBDIRS convention above (80cc opts
 # INTO extra suites; llvmz80 opts OUT of one it cannot support).
+#
+# recordbench is excluded as an XFAIL: recordbench.c has signed-integer-overflow
+# UB in churn() (two masked int fields summed to <=0xfffe, exceeding INT_MAX on
+# 16-bit int, THEN masked with & 0x7fff). clang legitimately emits `add nsw` and
+# InstCombine drops the now-redundant mask, so the checksum differs (37157 vs the
+# host-verified 4389). This is a bug in the TEST, not the compiler; sccz80 passes
+# only by not exploiting the nsw. Tracked in ravn/z88dk#38 -- re-include this suite
+# once recordbench.c is made UB-free (unsigned int fields).
 ifeq ($(COMPILER),llvmz80)
-SUBDIRS := $(filter-out far,$(SUBDIRS))
+SUBDIRS := $(filter-out far recordbench,$(SUBDIRS))
 endif
 
 
