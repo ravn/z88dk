@@ -32,12 +32,12 @@ figure was individual test binaries). All commits local only (no push/PR).
 Key measured fact: **under z88dk `+test`/genmath, clang-z80 `double` is 4 bytes**
 (32-bit), not the 8-byte IEEE double it uses elsewhere. Verified with a probe.
 
-## OPEN — 2 suites blocked; math suite MOSTLY GREEN (14/16, rest blocked on #278)
+## OPEN — 2 suites blocked (regex, target_io); math GREEN via XFAIL (#278)
 
-1. **math** — HEADER FIX LANDED (`ff60206bc2`): now **14/16 pass** under
-   llvmz80 (was 11/16). sccz80/sdcc stay 16/16 (no regression).
+1. **math** — GREEN under llvmz80 (via XFAIL). `test_math32`: **16 run,
+   14 passed, 0 failed, 2 xfail** (runtest exits 0). sdcc/sccz80 stay 16/16.
 
-   (1a) **sqrt/fmin/fmax/fabs — FIXED (z88dk header).** Under clang,
+   (1a) **sqrt/fmin/fmax/fabs — FIXED (z88dk header, `ff60206bc2`).** Under clang,
    `sys/compiler.h` defines `__STDC_ABI_ONLY`, so the `#ifndef __STDC_ABI_ONLY`
    fastcall/callee routing in `include/math/math_math32.h` is SKIPPED; the plain
    fallback decls carried NO calling convention, so clang used its default
@@ -55,7 +55,10 @@ Key measured fact: **under z88dk `+test`/genmath, clang-z80 `double` is 4 bytes*
    **+993** (first C arg on top). Corroborated by the math cores: `pow(2,3)`->9
    (=3^2 swapped), `fmod(5.5,2)`->2. These two are left UNANNOTATED in the header
    (a header arg-swap would mask the bug and double-swap once #278 lands). Full
-   repro in `tasks/bug-sdcccall0-multiarg-order-2026-08-03.md`.
+   repro in `tasks/bug-sdcccall0-multiarg-order-2026-08-03.md`. Marked XFAIL in
+   `math.c` under `__LLVMZ80` (`suite_add_xfail_test`, framework support added in
+   `e84b32907e`) so the suite is green; an XPASS will signal #278 is fixed and
+   the marker should be removed.
 
 2. **regex** — CONFIRMED miscompile of z88dk's regexp library under clang-z80.
    `regexec` prints `regexp(3): corrupted program` (its magic-byte sanity
