@@ -2,16 +2,17 @@
 # Red-green runtime test: console output must survive an intervening fopen.
 # See runtime_file_console.c for the full defect description.
 #
-# GREEN (classic clib): the program prints BOTH lines to the console
+# GREEN (all clibs): the program prints BOTH lines to the console
 #        BEFORE
 #        AFTER
 #
-# RED  (newlib_iy / newlib_ix, and identically SDCC sdcc_iy): opening a file
-#        rebinds the stdout console stream to the CP/M file driver, so the
-#        second puts() is misrouted into the file and the console shows only
-#        "BEFORE".  This is a newlib CP/M stdio/fcntl driver defect exposed by
-#        the upstream file driver (z88dk #3025); the write path is fine, the
-#        console stream is what gets corrupted.
+# History: opening a file used to rebind the stdout console stream to the
+#        CP/M file driver on the newlib routes (newlib_iy/_ix, and identically
+#        SDCC sdcc_iy), misrouting the second puts() into the file so the
+#        console showed only "BEFORE" (z88dk #3025 file-driver defect; write
+#        path fine, console stream corrupted).  That gap is now CLOSED on every
+#        route (verified newlib_iy/newlib_ix/sdcc_iy all print AFTER), so the
+#        former newlib XFAIL is retired and every clib is a hard PASS/FAIL.
 #
 # Usage: ZCCCFG=<z88dk>/lib/config PATH=<z88dk>/bin:$PATH \
 #        NTVCM=/path/to/ntvcm ./runtime_file_console.sh
@@ -43,20 +44,7 @@ OUT=$(cd "$WORK" && "$NTVCM" rt.com 2>/dev/null | tr -d '\r')
 
 echo "$OUT" | grep -qx "BEFORE" || fail "missing BEFORE (console broken before fopen). got: [$OUT]"
 
-# The defect only affects the newlib-based routes (newlib_iy/_ix and the SDCC
-# newlib sdcc_iy/_ix).  There it is a KNOWN, still-unfixed bug, so report XFAIL
-# to keep the newlib run green while staying visible; report XPASS if the gap
-# ever closes so the marker gets retired.  On the classic clib it must PASS.
-case "${TEST_CLIB:-classic}" in
-    classic)
-        echo "$OUT" | grep -qx "AFTER" || fail "console output after fopen was lost/misrouted. got: [$OUT]"
-        echo "PASS: console output survives an intervening fopen (BEFORE + AFTER both printed)"
-        ;;
-    *)
-        if echo "$OUT" | grep -qx "AFTER"; then
-            echo "XPASS: newlib console-after-fopen now works (AFTER printed) -- retire this xfail"
-        else
-            echo "XFAIL: newlib file driver corrupts stdout -- console output after fopen is lost/misrouted (write path OK, console stream rebound to the file). Reproduces under clang AND sdcc; classic clib unaffected. got: [$OUT]"
-        fi
-        ;;
-esac
+# The console-after-fopen defect (formerly newlib-only) is fixed on every
+# route, so this is now a hard assertion for all clibs: AFTER must appear.
+echo "$OUT" | grep -qx "AFTER" || fail "console output after fopen was lost/misrouted. got: [$OUT]"
+echo "PASS: console output survives an intervening fopen (BEFORE + AFTER both printed)"
