@@ -25,8 +25,16 @@ endif
 # host-verified 4389). This is a bug in the TEST, not the compiler; sccz80 passes
 # only by not exploiting the nsw. Tracked in ravn/z88dk#38 -- re-include this suite
 # once recordbench.c is made UB-free (unsigned int fields).
+#
+# zx is excluded because every one of its 13 .c files is a thin C wrapper around
+# a classic-clib `#asm ... #endasm` inline-assembly block (INCLUDE of the z80
+# .asm display routines under test). clang / -compiler=llvmz80 has no `#asm`
+# preprocessor directive, so each file fails at preprocessing with
+# "invalid preprocessing directive". These tests exercise z80 asm library
+# routines, not C codegen, so there is nothing for the clang backend to compile;
+# exclude the whole suite (same rationale as far -- unsupportable, not a bug).
 ifeq ($(COMPILER),llvmz80)
-SUBDIRS := $(filter-out far recordbench,$(SUBDIRS))
+SUBDIRS := $(filter-out far recordbench zx,$(SUBDIRS))
 endif
 
 
