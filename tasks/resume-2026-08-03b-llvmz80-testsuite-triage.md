@@ -181,3 +181,34 @@ The 4 newlib_iy reds were, correctly diagnosed:
 
 Net: newlib_iy leg down to a single honest FAIL (setjmp). classic (forward
 path) + test/suites remain fully green.
+
+---
+
+## 2026-08-04: scope clarification — what the llvmz80 gate is (and is NOT)
+
+Re-verified the full green picture and settled a false alarm:
+
+- **Canonical llvmz80 suites gate = `make -C test/suites COMPILER=llvmz80 all`**
+  → exits 0 (77 suite summaries). Non-z80 CPU targets self-skip
+  (`[llvmz80] skip test_8080.bin -- z80-only backend`); `far`/`recordbench`/`zx`
+  excluded via `filter-out` in test/suites/Makefile.
+- **`long_ir` and `debuginfo` are 80cc-ONLY suites** — added to SUBDIRS only under
+  `ifeq ($(COMPILER),80cc)` (test/suites/Makefile line ~12). They use classic
+  `#asm`/`#endasm`, `__naked`, `__addressmod` which clang/llvmz80 cannot
+  preprocess ("invalid preprocessing directive"). They are NOT part of the
+  llvmz80 gate and must not be force-built under it.
+- **`test/suites/run-matrix.sh` is the 80cc harness** (its header: "behavioural
+  correctness matrix for the 80cc backend"). It force-builds every CPU variant
+  (8080/gbz80/8085) through whatever COMPILER you pass, so running it with
+  COMPILER=llvmz80 spuriously fails long_ir on #asm. Do NOT use run-matrix.sh to
+  judge llvmz80 greenness — use the canonical `make COMPILER=llvmz80 all`.
+- **test/clang** matrix (separate integration suite): classic 41 PASS/0 FAIL,
+  newlib_iy 35 PASS/0 FAIL.
+- Not llvmz80-scoped: `test/feature` (multi-target; pre-existing baseline sccz80
+  failure on `hdos`/`fsync`), `test/framework` (harness test.c/test.h only),
+  `src/*` unit tests (toolchain, not backend).
+
+Net: everything in the llvmz80 scope is green.
+
+(Pre-existing hygiene nit, not fixed: the target_io suite build drops a 0-byte
+`test/suites/target_io/m` that its `clean` rule doesn't remove.)
