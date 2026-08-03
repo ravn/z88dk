@@ -8,6 +8,23 @@ FIXSOURCES = $(SOURCES) fixmath.c
 FIXOBJECTS := $(FIXSOURCES:.c=.o)
 CFLAGS +=  -DNO_LOG_RUNNING -DNO_LOG_PASSED 
 
+# ---------------------------------------------------------------------------
+# llvmz80 (ravn/llvm-z80 clang) emits IEEE-754 binary32 for `float`. Of all the
+# math-library formats this suite exercises, only Math32 shares that binary32
+# representation -- Genmath (48-bit), MBF32, BBC, CPC, math16, math48, the 9511
+# APU and the fix16 fixed-point library use incompatible encodings that clang
+# cannot target. So under COMPILER=llvmz80 build ONLY the Math32 primary, and
+# supply the compiler-rt soft-float bridges (___addsf3/subsf3/mulsf3/divsf3,
+# ___cmpsf2/gtsf2/gesf2/unordsf2, ___floatsisf/...) that alias clang's libcall
+# names onto the math32 sdcccall(0) cores. See ravn/z88dk#38 and
+# test/clang/runtime_float.sh for the proven link recipe.
+MATH32_BRIDGES =
+MATH32_FLAGS   =
+ifeq ($(COMPILER),llvmz80)
+LLVMZ80_LIBDIR = ../../../libsrc/l/llvmz80
+MATH32_BRIDGES = $(LLVMZ80_LIBDIR)/__addsf3.asm $(LLVMZ80_LIBDIR)/__cmpsf2.asm $(LLVMZ80_LIBDIR)/__floatsisf.asm
+MATH32_FLAGS   = -mllvm -z80-float-sdcccall0
+endif
 
 all: test_genmath.bin test_daimath32.bin test_bbcmath.bin test_math16.bin test_math16_8085.bin \
 	test_math32.bin test_math32_z180.bin test_math32_z80n.bin \
@@ -79,8 +96,8 @@ test_math48.bin: $(FPSOURCES)
 	$(call compile, -DMATH48 -DMATH_LIBRARY="\"\\\"Math48\\\"\"", -lmath48)
 	$(runtest)
 
-test_math32.bin: $(FPSOURCES)
-	$(call compile, -DMATH32 -D__MATH_MATH32 -fp-mode=ieee -DMATH_LIBRARY="\"\\\"Math32\\\"\"", -lmath32)
+test_math32.bin: $(FPSOURCES) $(MATH32_BRIDGES)
+	$(call compile, -DMATH32 -D__MATH_MATH32 -fp-mode=ieee $(MATH32_FLAGS) -DMATH_LIBRARY="\"\\\"Math32\\\"\"", -lmath32)
 	$(runtest)
 
 test_math32_z180.bin: $(FPSOURCES)

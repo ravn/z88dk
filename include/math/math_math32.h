@@ -5,6 +5,26 @@
 #include <sys/types.h>
 #include <limits.h>
 
+// ravn/llvm-z80 (clang) defines __STDC_ABI_ONLY (see <sys/compiler.h>), which
+// disables the __z88dk_fastcall/__z88dk_callee macro routing used below by
+// sccz80/sdcc.  The plain fallback decls are then what clang actually calls, so
+// they need an explicit calling convention: the math32 cm32_sdcc_* cores are
+// SDCC-compiled __smallc == sdcccall(0), but clang's default is sdcccall(1), so
+// an unannotated decl makes clang pass the float arg / read the result in the
+// wrong registers.  Annotate the plain decls __smallc so clang matches the
+// cores.  ONLY order-immune functions are safe here -- 1-arg (sqrt/fabs) and
+// commutative 2-arg (fmin/fmax).  Non-commutative 2-arg (pow/fmod) are
+// deliberately NOT annotated: clang's sdcccall(0) reverses multi-argument stack
+// order relative to SDCC (verified differential: isub(1000,7) = -993 sdcc /
+// +993 clang, see z88dk tasks/bug-sdcccall0-multiarg-order-2026-08-03.md), so
+// they would return swapped-operand results.  They need a backend fix, not a
+// header workaround, and are left unannotated until that lands.
+#if defined(__LLVMZ80)
+#define __MATH32_ABI __smallc
+#else
+#define __MATH32_ABI
+#endif
+
 #define FLT_ROUNDS          1
 #define FLT_RADIX           2
 
@@ -94,7 +114,7 @@ extern double_t __LIB__ atanh_fastcall(double_t x) __z88dk_fastcall;
 extern double_t __LIB__ inv(double_t a) ;
 extern double_t __LIB__ invsqrt(double_t a) ;
 extern double_t __LIB__ sqr(double_t a) ;
-extern double_t __LIB__ sqrt(double_t a) ;
+extern double_t __LIB__ sqrt(double_t a) __MATH32_ABI;
 __ZPROTO2(double_t,,pow,double_t,x,double_t,y)
 
 #ifndef __STDC_ABI_ONLY
@@ -151,13 +171,13 @@ extern double_t __LIB__ round_fastcall(double_t x) __z88dk_fastcall;
 #define round(x) round_fastcall(x)
 #endif
 
-extern double_t __LIB__ fmin(double_t z,double_t y);
+extern double_t __LIB__ fmin(double_t z,double_t y) __MATH32_ABI;
 #ifndef __STDC_ABI_ONLY
 extern double_t __LIB__ fmin_callee(double_t z,double_t y) __z88dk_callee;
 #define fmin(x,y) fmin_callee(x,y)
 #endif
 
-extern double_t __LIB__ fmax(double_t z,double_t y);
+extern double_t __LIB__ fmax(double_t z,double_t y) __MATH32_ABI;
 #ifndef __STDC_ABI_ONLY
 extern double_t __LIB__ fmax_callee(double_t z,double_t y) __z88dk_callee;
 #define fmax(x,y) fmax_callee(x,y)
@@ -201,7 +221,7 @@ extern double_t __LIB__ frexp_callee(double_t value,int *exp) __smallc __z88dk_c
 #endif
 
 /* General */
-extern double_t __LIB__ fabs(double_t x);
+extern double_t __LIB__ fabs(double_t x) __MATH32_ABI;
 #ifndef __STDC_ABI_ONLY
 extern double_t __LIB__ fabs_fastcall(double_t x) __z88dk_fastcall;
 #define fabs(x) fabs_fastcall(x)
