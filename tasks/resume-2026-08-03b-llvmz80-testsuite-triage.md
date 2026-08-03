@@ -129,3 +129,55 @@ stdlib-newlib.
   rewriting their logic (recordbench precedent, #38) — exclude or #ifdef.
 - Every float/ABI bridge MUST be runtime-verified under ntvcm.
 - Durable notes live in-project (this file), never ~/.claude/.
+
+## test/clang integration suite — newlib matrix leg (2026-08-03, segment 3)
+
+Besides test/suites there are two more trees under test/: **test/clang/** (the
+clang integration suite, 42 runtime tests, run via run_all.sh / run_matrix.sh)
+and **test/feature/** (a multi-target z88dk feature build that IGNORES COMPILER
+— it fails identically at baseline sccz80 on the `hdos` target with undefined
+`fsync`, a pre-existing upstream z88dk gap, out of scope).
+
+test/clang status:
+- **classic clib** (the project's forward-supported path): GREEN — 41 PASS,
+  0 FAIL, 3 SKIP, 5 XFAIL.
+- **newlib_iy** (sanctioned -clib=newlib_iy/_ix clang route, `run_matrix.sh`):
+  was 32 PASS / 4 FAIL / 1 XFAIL; now **34 PASS / 1 FAIL / 13 SKIP / 1 XFAIL**.
+
+**CORRECTION of an earlier claim in this session:** I first reported the newlib
+failures as a "flaky harness race that passes in isolation." That was WRONG.
+The tests read `${ZCC_CLIB:-}`; run_all.sh derives ZCC_CLIB from TEST_CLIB, but
+running a test directly with only `TEST_CLIB=newlib_iy` (no ZCC_CLIB) silently
+builds **classic** — that is why they "passed in isolation." With ZCC_CLIB set
+they fail deterministically. Always set BOTH TEST_CLIB and ZCC_CLIB (or go
+through run_all.sh) when reproducing a matrix leg.
+
+The 4 newlib_iy reds were, correctly diagnosed:
+1. **runtime_file_console** — XPASS: the console-after-fopen gap (z88dk #3025)
+   is CLOSED on every non-classic route (verified newlib_iy/_ix/sdcc_iy all
+   print AFTER with real ZCC_CLIB). XFAIL retired; test is now a hard PASS/FAIL
+   for all clibs. (commit c3d1829261)
+2. **runtime_stdlib2** — isqrt/unbcd are classic-clib-only z88dk extensions
+   (declared in classic include/stdlib.h, absent from newlib _DEVELOPMENT
+   headers). Legit classic-only test -> added a documented newlib_skip_reason
+   entry. (commit 1570b1e548)
+3. **runtime_memmove_rt** — REAL bridge gap: clang lowers a runtime-unknown-
+   direction llvm.memmove to internal `___memmove_rt` (Z80_AllReg) regardless
+   of clib, but the bridge existed only under libsrc/l/llvmz80/ (classic,
+   INCLUDE config_private.inc). FIXED: self-contained newlib copy
+   (libsrc/l/llvmz80/newlib/__memmove_rt.asm) tail-calling the same overlap-safe
+   asm_memmove core, bundled into llvmz80_imath.lib (build_imath_lib.sh +
+   regenerated lib, git-tracked). Verified PASS newlib_iy/_ix, classic
+   unregressed. (commit 1570b1e548)
+4. **runtime_setjmp** — REAL newlib-route ABI bug, left VISIBLE (not skipped,
+   not yet fixed). `<setjmp.h>` maps setjmp(env)->l_setjmp(&env) with l_setjmp
+   declared `__SMALLC`; under clang the direct setjmp() call returns NONZERO
+   (test jumps straight to the else branch with stage=0, no A_SETJMP0), so the
+   sccz80 stack-worker return is being read from the wrong place. Same ABI class
+   as regex #39 / fcntl #23 (HL-vs-DE / smallc-mapping). NOT force-fixed: setjmp/
+   longjmp register save-restore makes a wrong fix dangerous, and this is the
+   deprioritized secondary path. Candidate for a proper header fix + a filed
+   issue (explain-before-filing: needs user go-ahead). classic setjmp PASSES.
+
+Net: newlib_iy leg down to a single honest FAIL (setjmp). classic (forward
+path) + test/suites remain fully green.
