@@ -141,3 +141,20 @@ LOW and contained:
   setjmp->l_setjmp, a plain call). The current test uses a `static` (memory)
   variable so it is unaffected, but code relying on a non-volatile *local* across
   setjmp/longjmp could miscompile. Robustness item, not the current failure.
+
+---
+
+## STATUS: IMPLEMENTED + VERIFIED (2026-08-03, commit 5075e62421)
+
+Fix applied exactly as planned:
+- `include/_DEVELOPMENT/proto/setjmp.h` — guarded `#if defined(__LLVMZ80)` branch
+  declaring `l_setjmp`/`l_longjmp` as `__smallc`; `#else` keeps `__OPROTO/__SPROTO`.
+- `include/_DEVELOPMENT/common/setjmp.h` — regenerated via `m4 proto/setjmp.h`.
+
+Verification (all with real `ZCC_CLIB`):
+- `runtime_setjmp.sh`: newlib_iy PASS, newlib_ix PASS, classic PASS (unregressed).
+- Full `run_all.sh` newlib_iy: **35 PASS, 0 FAIL, 13 SKIP, 1 XFAIL** (was 1 FAIL).
+- `run_matrix.sh`: classic 41 PASS/0 FAIL, newlib_iy 35 PASS/0 FAIL — both legs green.
+- sccz80/SDCC unaffected (`#else` branch unchanged).
+
+test/clang matrix is now fully green under llvmz80.
