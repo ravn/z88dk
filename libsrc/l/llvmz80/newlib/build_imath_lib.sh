@@ -23,10 +23,11 @@ Z80ASM=${Z80ASM:-z88dk-z80asm}
 command -v "$Z80ASM" >/dev/null 2>&1 || { echo "ERROR: $Z80ASM not on PATH"; exit 1; }
 
 cd "$DIR"
-rm -f llvmz80_imath.lib __divhi3.o __divsi3.o __udivqi3.o __mulsi3.o
+rm -f llvmz80_imath.lib __divhi3.o __divsi3.o __udivqi3.o __mulsi3.o __memmove_rt.o
 # -x=name creates name.lib from the listed sources; -mz80 = plain Z80.
 #   __divhi3 = 16-bit div/mod/mul   __divsi3 = 32-bit div/mod (+ fused divmod)
 #   __udivqi3 = 8-bit div/mod (-Os/-Oz)   __mulsi3 = 32-bit multiply
-"$Z80ASM" -mz80 -x=llvmz80_imath __divhi3.asm __divsi3.asm __udivqi3.asm __mulsi3.asm
-rm -f __divhi3.o __divsi3.o __udivqi3.o __mulsi3.o
+#   __memmove_rt = runtime-unknown-direction memmove bridge (-> asm_memmove)
+"$Z80ASM" -mz80 -x=llvmz80_imath __divhi3.asm __divsi3.asm __udivqi3.asm __mulsi3.asm __memmove_rt.asm
+rm -f __divhi3.o __divsi3.o __udivqi3.o __mulsi3.o __memmove_rt.o
 echo "built: $DIR/llvmz80_imath.lib"

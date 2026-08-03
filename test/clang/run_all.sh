@@ -118,6 +118,7 @@ newlib_skip_reason() {
         runtime_fileio_multi.sh) echo "newlib CP/M FILE* not supported (ravn/z88dk#34 WONTFIX)"; return 0 ;;
         runtime_fileio_remove.sh)echo "newlib CP/M FILE* not supported (ravn/z88dk#34 WONTFIX)"; return 0 ;;
         runtime_fileio_rename.sh)echo "newlib CP/M FILE* not supported (ravn/z88dk#34 WONTFIX)"; return 0 ;;
+        runtime_stdlib2.sh)      echo "isqrt/unbcd are classic-clib-only z88dk extensions (declared in classic include/stdlib.h, absent from newlib _DEVELOPMENT headers)"; return 0 ;;
         # (The clang integer-helper libcalls __mulhi3/__divsi3/__divmodsi4/...
         # are now provided on the newlib route by llvmz80_imath.lib -- see
         # libsrc/l/llvmz80/newlib/ -- so runtime_qsort/intdiv/long PASS.
