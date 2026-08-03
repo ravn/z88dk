@@ -32,44 +32,30 @@ figure was individual test binaries). All commits local only (no push/PR).
 Key measured fact: **under z88dk `+test`/genmath, clang-z80 `double` is 4 bytes**
 (32-bit), not the 8-byte IEEE double it uses elsewhere. Verified with a probe.
 
-## OPEN — 3 suites, each a REAL bug (not a test tweak), root-caused
+## OPEN — 2 suites blocked; math suite MOSTLY GREEN (14/16, rest blocked on #278)
 
-1. **math** — LINK GAP CLOSED; now 11/16 pass. Remaining 5 (sqrt pow fmod
-   fmin fmax) split into TWO distinct root causes (both verified via raw-byte
-   probes under z88dk-ticks, 2026-08-03):
+1. **math** — HEADER FIX LANDED (`ff60206bc2`): now **14/16 pass** under
+   llvmz80 (was 11/16). sccz80/sdcc stay 16/16 (no regression).
 
-   (1a) **sqrt/fmin/fmax/fabs — z88dk HEADER gap (FIXABLE, owned fork).**
-   Under clang, `sys/compiler.h` defines `__STDC_ABI_ONLY`, so ALL the
-   `#ifndef __STDC_ABI_ONLY` blocks in `include/math/math_math32.h` (which for
-   sccz80/sdcc `#define sqrt(x) sqrt_fastcall(x)` etc.) are SKIPPED. The plain
-   fallback decls (`extern double_t __LIB__ sqrt(double_t)`) carry NO calling-
-   convention attribute, so clang calls `_sqrt/_fmin/_fmax/_fabs` with its
-   default sdcccall(1) while those symbols are the sdcccall(0) `cm32_sdcc_*`
-   cores -> mismatch. VERIFIED FIX: mark these plain decls `__smallc`
-   (=sdcccall(0)) OR route to the existing `*_fastcall` entry points under
-   `__LLVMZ80`. Confirmed correct at runtime: sqrt(4)=0x3fffffff (~2, within
-   EPSILON 1e-6), fabs(-4)=4.0 exact, fmin(4,2)=2 / fmax(4,2)=4 exact. These
-   four are 1-arg or commutative -> immune to the (1b) order bug.
+   (1a) **sqrt/fmin/fmax/fabs — FIXED (z88dk header).** Under clang,
+   `sys/compiler.h` defines `__STDC_ABI_ONLY`, so the `#ifndef __STDC_ABI_ONLY`
+   fastcall/callee routing in `include/math/math_math32.h` is SKIPPED; the plain
+   fallback decls carried NO calling convention, so clang used its default
+   sdcccall(1) while the `cm32_sdcc_*` cores are sdcccall(0) -> mismatch. FIX:
+   a new `__LLVMZ80`-gated `__MATH32_ABI == __smallc` annotates the four
+   order-immune plain decls (1-arg sqrt/fabs, commutative 2-arg fmin/fmax).
+   Verified at runtime: sqrt(4)~2 (within EPSILON 1e-6), fabs(-4)=4, fmin(4,2)=2,
+   fmax(4,2)=4. Makefile Path B wiring (Math32-only + sf bridges +
+   `-z80-float-sdcccall0`) committed in the same commit.
 
-   (1b) **pow/fmod — BLOCKED on a VERIFIED clang-z80 sdcccall(0) multi-arg
-   stack-order discrepancy (backend).** clang's `sdcccall(0)` pushes 2+ stack
-   args in the OPPOSITE order to z88dk's `-compiler=sdcc` (real SDCC).
-   Differential (identical hand-written asm callee `isub(a,b)=a-b`, only the
-   compiler differs): `isub(1000,7)` -> SDCC **-993** (2nd C arg on top of
-   stack) vs clang **+993** (1st C arg on top). Exact ±993, not garbage ->
-   dispositive. Independently corroborated by the math cores: `pow_callee(2,3)`
-   -> 9 (=3^2, swapped), correct only when args are hand-swapped
-   `pow_callee(3,2)` -> 8; same for `fmod`. Even the dedicated `_callee`
-   (z80_callee) entry points fail because the 2 args arrive reversed. NOTE the
-   nuance (not yet spec-verified against SDCC docs): clang's sdcccall(0) DOES
-   match z88dk's *hand-written* classic clib (str/mem work), and only diverges
-   from *SDCC-compiled* sdcccall(0) code (the math32 cores). Which order is
-   spec-correct per the SDCC manual is UNVERIFIED. A header arg-swap would be a
-   workaround masking a compiler bug (forbidden by file-bugs-not-fixes, and it
-   would double-swap once the backend is fixed). => file a backend/ABI bug at
-   ravn/llvm-z80, but per `feedback_explain_before_filing` GET USER GO-AHEAD
-   first. Until resolved, math suite stays BLOCKED (like regex/target_io); keep
-   the Path B Makefile wiring (uncommitted) that gets 11/16.
+   (1b) **pow/fmod — BLOCKED on ravn/llvm-z80#278 (FILED 2026-08-03).** clang's
+   `sdcccall(0)` pushes 2+ stack args in the OPPOSITE order to real SDCC.
+   Dispositive differential (identical hand-written asm callee, only the compiler
+   differs): `isub(1000,7)` -> SDCC **-993** (last C arg on top) vs clang
+   **+993** (first C arg on top). Corroborated by the math cores: `pow(2,3)`->9
+   (=3^2 swapped), `fmod(5.5,2)`->2. These two are left UNANNOTATED in the header
+   (a header arg-swap would mask the bug and double-swap once #278 lands). Full
+   repro in `tasks/bug-sdcccall0-multiarg-order-2026-08-03.md`.
 
 2. **regex** — CONFIRMED miscompile of z88dk's regexp library under clang-z80.
    `regexec` prints `regexp(3): corrupted program` (its magic-byte sanity

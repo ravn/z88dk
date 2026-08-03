@@ -1,7 +1,7 @@
 # VERIFIED discrepancy: clang-z80 `sdcccall(0)` reverses multi-arg stack order vs SDCC
 
-Status: **root-caused + verified, NOT filed** (awaiting user go-ahead per
-`feedback_explain_before_filing`). Found 2026-08-03 while getting the z88dk
+Status: **FILED as ravn/llvm-z80#278** 2026-08-03 (user gave explicit go-ahead).
+Root-caused + verified. Found 2026-08-03 while getting the z88dk
 `test/suites/math` suite green under `-compiler=llvmz80`.
 
 ## Symptom
