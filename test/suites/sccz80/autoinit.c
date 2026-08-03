@@ -15,8 +15,17 @@ void test_string_array_overflow(void)
 {
      char    string[5] = "HelloThere";
 
-     assertEqual(0, strcmp(string,"Hell"));
      assertEqual(5, sizeof(string));
+#ifdef __LLVMZ80
+     /* Standard C (C11 6.7.9p14): a char[N] initialised from a longer string
+        literal takes the first N characters with NO terminator, so `string`
+        holds the 5 bytes "Hello" (unterminated). clang follows the standard;
+        sccz80 instead truncates to "Hell\0". strcmp here would read past the
+        array, so compare the well-defined 5-byte content directly. */
+     assertEqual(0, memcmp(string,"Hello",5));
+#else
+     assertEqual(0, strcmp(string,"Hell"));
+#endif
 }
 
 
@@ -40,7 +49,14 @@ void test_double_array(void)
 {
     double_t numbers[] = { 1.0, 2.0, 3.0, 4.0};
 
+#ifdef __LLVMZ80
+    /* Under z88dk's +test/genmath config clang-z80 uses a 4-byte (32-bit)
+       double, so 4 elements = 16; sccz80's default double is the 6-byte
+       48-bit format, hence 24 there. (Measured, not assumed.) */
+    assertEqual(16, sizeof(numbers));
+#else
     assertEqual(24, sizeof(numbers));
+#endif
     assertEqual(1.0, numbers[0]);
 }
 
