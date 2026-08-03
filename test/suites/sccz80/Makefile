@@ -18,6 +18,23 @@ TARGET_KC160 = test_kc160_bitfields.bin test_kc160_rshift.bin test_kc160_lshift.
 
 
 CFILES = $(wildcard *.c)
+# ravn/llvm-z80: these four suites hard-code sccz80-specific ABI or rely on
+# non-standard / UB semantics, so their assertions legitimately fail under the
+# standards-correct llvmz80 backend -- there is no backend behaviour to match
+# (same rationale as far/recordbench; UB items tracked under ravn/z88dk#38):
+#   sizeof.c    sizeof(double)==6 (sccz80 48-bit double; llvmz80 +test = 4) and
+#               3-byte `far` pointers (far is unsupported under llvmz80).
+#   offsetof.c  bare `test_s` tag (non-standard; clang requires `struct test_s`)
+#               plus struct offsets that assume the 6-byte double.
+#   mult.c      3*715827883 overflows signed 32-bit long (UB); clang emits nsw.
+#   rshift.c    `0x8000000000000000LL` is unsigned per C (exceeds LLONG_MAX) so
+#               its `>>` is logical, while the signed `val >>` is arithmetic;
+#               the test assumes the two are equal.
+# autoinit.c is NOT excluded -- its two ABI-specific asserts were made
+# compiler-aware (__LLVMZ80) with standards-correct alternatives.
+ifeq ($(COMPILER),llvmz80)
+CFILES := $(filter-out sizeof.c offsetof.c mult.c rshift.c,$(CFILES))
+endif
 TARGET_Z80 := $(foreach test,$(CFILES:.c=),test_$(test).bin)
 
 ifeq ($(COMPILER),xcc)
