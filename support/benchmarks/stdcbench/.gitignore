@@ -1,0 +1,8 @@
+build/
+*.o
+*.map
+*.bin
+*.com
+zcc_opt.def
+*.tmp
+*.i2
