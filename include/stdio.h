@@ -262,7 +262,24 @@ extern void __LIB__ closeall(void);
 
 __ZPROTO3(char,*,fgets,char *,s,int,l,FILE *,fp)
 
+#if defined(__LLVMZ80)
+/* ravn/llvm-z80: same register-vs-stack mismatch as fopen/fread (the generic
+ * __ZPROTO2 clang branch calls the classic worker ___fputs with args in HL/DE,
+ * but _fputs is a __smallc stack worker: it does `pop bc=fp / pop de=s`).  The
+ * register call left BC/DE holding a garbage FILE*, ix was set from it and the
+ * subsequent write corrupted SP -> warm-boot restart loop.  Bind straight to
+ * the classic worker via a reversed-param __smallc prototype: clang's
+ * sdcccall(0) push puts the FIRST declared param on top, and _fputs reads fp
+ * from the top, so declaring fp first reproduces the exact stack frame the
+ * worker wants; clang caller-cleans (matching the worker) and moves the HL
+ * return into DE itself -- no asm bridge needed.  Verified: fputs("BC",f)
+ * returns 1 and the bytes read back as B,C.  See
+ * libsrc/l/llvmz80/CALLING_CONVENTION.md.  sccz80/sdcc keep __ZPROTO2. */
+extern int __LIB__ __fputs_llvmz80(FILE *fp, const char *s) __asm__("fputs") __smallc;
+#define fputs(s,fp) __fputs_llvmz80(fp,s)
+#else
 __ZPROTO2(int,,fputs,const char *,s,FILE *,fp)
+#endif
 #ifndef __STDC_ABI_ONLY
 extern int __LIB__  fputs_callee(const char *s,  FILE *fp) __smallc __z88dk_callee;
 #define fputs(a,b)   fputs_callee(a,b)
