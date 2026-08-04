@@ -260,7 +260,16 @@ extern void __LIB__ closeall(void);
 /* --------------------------------------------------------------*/
 /* Optimized stdio uses the 'CALLEE' convention here and there   */
 
+#if defined(__LLVMZ80)
+/* ravn/llvm-z80: register-vs-stack mismatch (see fputs/fread above). _fgets is a
+ * __smallc stack worker; the generic __ZPROTO3 register call left buf empty and
+ * corrupted SP -> warm-boot loop. Bind to the worker via a reversed-param
+ * __smallc prototype. sccz80/sdcc keep __ZPROTO3. */
+extern char __LIB__ *__fgets_llvmz80(FILE *fp, int l, char *s) __asm__("fgets") __smallc;
+#define fgets(s,l,fp) __fgets_llvmz80(fp,l,s)
+#else
 __ZPROTO3(char,*,fgets,char *,s,int,l,FILE *,fp)
+#endif
 
 #if defined(__LLVMZ80)
 /* ravn/llvm-z80: same register-vs-stack mismatch as fopen/fread (the generic
@@ -305,7 +314,16 @@ extern int __LIB__ putchar(int) __smallc;
 extern int __LIB__ fgetc(FILE *fp) __smallc;
 #define getc(f) fgetc(f)
 
+#if defined(__LLVMZ80)
+/* ravn/llvm-z80: register-vs-stack mismatch (see fputs above). _ungetc is a
+ * __smallc stack worker; the generic __ZPROTO2 register call made ungetc return
+ * -1 and drop the pushback. Bind to the worker via a reversed-param __smallc
+ * prototype. sccz80/sdcc keep __ZPROTO2. */
+extern int __LIB__ __ungetc_llvmz80(FILE *fp, int c) __asm__("ungetc") __smallc;
+#define ungetc(c,fp) __ungetc_llvmz80(fp,c)
+#else
 __ZPROTO2(int,,ungetc,int,c,FILE *,fp)
+#endif
 
 extern int __LIB__ feof(FILE *fp);
 #ifndef __STDC_ABI_ONLY
@@ -334,7 +352,16 @@ extern fpos_t __LIB__ ftell(FILE *fp) __smallc;
 #else
 extern fpos_t __LIB__ ftell(FILE *fp);
 #endif
+#if defined(__LLVMZ80)
+/* ravn/llvm-z80: register-vs-stack mismatch (see fputs above). _fgetpos is a
+ * __smallc stack worker; the generic __ZPROTO2 register call returned garbage
+ * and left *pos unset. Bind to the worker via a reversed-param __smallc
+ * prototype. sccz80/sdcc keep __ZPROTO2. */
+extern int __LIB__ __fgetpos_llvmz80(fpos_t *pos, FILE *fp) __asm__("fgetpos") __smallc;
+#define fgetpos(fp,pos) __fgetpos_llvmz80(pos,fp)
+#else
 __ZPROTO2(int,,fgetpos,FILE *,fp,fpos_t *, pos)
+#endif
 
 
 #if defined(__LLVMZ80)
