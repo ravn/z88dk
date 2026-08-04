@@ -16,17 +16,18 @@
 #   verify    (+cpm -create-app, run under ntvcm)  -> correctness gate + .COM size
 #   benchmark (+test -DBENCH_TIMER, z88dk-ticks)   -> cycles between TIMER labels
 #
-# HEADLINE (comparable) module set = c90base only.  The llvmz80 lanes ALSO run
-# c90lib (standard-library module) always: both former llvmz80 toolchain
-# blockers are fixed (the z80asm .asciz split in splitascii.pl and the -O2
-# TruncInstCombine cyclic crash) and the heap is set up in portme.h, so
-# malloc/calloc/realloc/free all work.  Per stdcbench RULES a module dropped for
-# a lane is dropped for all HEADLINE comparisons; the c90base scores stay
-# strictly comparable across lanes, while c90lib is reported for whichever lanes
-# build it.  MODULES=all additionally enables c90lib on the sdcc/sccz80 lanes.
+# FAIR comparison: every lane runs the SAME module set so the numbers isolate
+# codegen on identical work.  Default module set = c90base (all lanes support
+# it).  MODULES=all adds c90lib (the standard-library module): the llvmz80 lane
+# links it fine -- both former llvmz80 toolchain blockers are fixed (the z80asm
+# .asciz split in splitascii.pl and the -O2 TruncInstCombine cyclic crash) and
+# the heap is set up in portme.h so malloc/calloc/realloc/free all work -- while
+# the sdcc/sccz80 lanes currently build-fail on c90lib via this harness (shown
+# honestly as build-fail).  c90float/c90double do not exist in stdcbench 0.8
+# (upstream stubs; see portme.h), so c90base+c90lib is the full implemented suite.
 #
-# Usage:  ./compare.sh                 # c90base (all lanes) + c90lib (llvmz80)
-#         MODULES=all ./compare.sh     # additionally c90lib on sdcc/sccz80
+# Usage:  ./compare.sh                 # c90base on every lane (fair)
+#         MODULES=all ./compare.sh     # + c90lib (llvmz80 OK; sdcc/sccz80 fail)
 #         FREQ=4000000 ./compare.sh
 #
 # Requires on PATH: zcc, z88dk-ticks (z88dk/bin), and ntvcm (or NTVCM=/path).
@@ -80,14 +81,15 @@ build_one() {
     local name="$1" sel="$2" shim="$3" mode="$4" out="$5"
     local pfx run=""
     [ "$shim" = "1" ] && { make_shim; run="PATH=$SHIMDIR:$PATH"; }
-    # Per-lane module set.  The llvmz80 lanes fully support c90lib now (heap set
-    # up in portme.h + both former toolchain blockers fixed: the z80asm .asciz
-    # split and the -O2 TruncInstCombine crash), so they always build the full
-    # module set regardless of $MODULES.  Other lanes follow the global $MODULES.
+    # Per-lane module set.  ALL lanes (llvmz80 included) follow the global
+    # $MODULES so the table is a FAIR comparison -- every lane runs identical
+    # work.  Default MODULES=base runs c90base on every lane; MODULES=all adds
+    # c90lib (llvmz80 links it; sdcc/sccz80 currently build-fail on c90lib via
+    # this harness, which shows up honestly as build-fail rather than being
+    # hidden).  llvmz80's full-suite (c90base+c90lib) coverage is documented
+    # separately in README ("Full module set"); run `MODULES=all ./compare.sh`
+    # to reproduce the llvmz80 full-suite number.
     local lmod="$MODFLAG" lsrcs="$SRCS"
-    case "$name" in
-        llvmz80*) lmod=""; lsrcs="$BASE_SRCS $LIB_SRCS" ;;
-    esac
     ( cd "$SRC"
       if [ "$mode" = "cpm" ]; then
           eval $run zcc "${sel/+X/+cpm}" $lmod $lsrcs -o "$out" -create-app
@@ -127,7 +129,7 @@ done
 echo ""
 echo "stdcbench $(grep -o 'stdcbench [0-9.]*' "$SRC/stdcbench.c" | head -1 | awk '{print $2}') -- cross-compiler sweep (module set: $MODULES)"
 echo "Fixed deterministic workload; cycles = T-states via z88dk-ticks; size = CP/M .COM bytes."
-echo "Note: llvmz80 lanes always include c90lib (full module set); other lanes follow module set above."
+echo "Note: FAIR -- every lane runs the same module set ($MODULES) on identical work."
 echo ""
 printf '| %-12s | %-4s | %-10s | %-14s | %-10s |\n' "Compiler" "opt" ".COM bytes" "cycles" "self-check"
 printf '| %s | %s | %s | %s | %s |\n' "------------" "----" "----------" "--------------" "----------"
