@@ -45,15 +45,25 @@ typedef unsigned long stdcbench_clock_t;
 #pragma define CLIB_MALLOC_HEAP_SIZE=24576
 #endif
 
-/* Integer-only modules: exercise codegen + the standard library, no float.
+/* Module selection.
+ *
+ * stdcbench 0.8 ships only TWO implemented modules -- c90base and c90lib.
+ * c90float and c90double are upstream placeholders marked "NOT YET IMPLEMENTED!"
+ * in src/README (their c90float()/c90double() bodies just `return 0`; the
+ * floating-point module is item #1 in src/TODO).  They are therefore left
+ * `#undef`ed here because there is nothing to run -- NOT because a toolchain
+ * limitation disabled them.  This means c90base + c90lib IS the full implemented
+ * stdcbench 0.8 suite; "full coverage" needs no float runtime.  (llvmz80 double
+ * support does exist separately -- ../../../llvmz80-softfloat, LLVMZ80RTLIB --
+ * but stdcbench never calls it.)
  *
  * Module selection can be overridden from the build (so lanes that hit a
  * toolchain limitation can drop a module symmetrically and comparably):
  *   -DSTDCBENCH_DISABLE_C90LIB   omit the c90lib (standard-library) module.
  */
 #define C90BASE
-#undef  C90FLOAT
-#undef  C90DOUBLE
+#undef  C90FLOAT   /* upstream stub: "NOT YET IMPLEMENTED!" (src/README) */
+#undef  C90DOUBLE  /* upstream stub: "NOT YET IMPLEMENTED!" (src/README) */
 #ifndef STDCBENCH_DISABLE_C90LIB
 #define C90LIB
 #endif

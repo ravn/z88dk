@@ -81,6 +81,16 @@ run the complete benchmark green (`.COM` ~29822 B, self-check `OK`, `STDCBENCH
 OK`, clean exit).  This exercises the full standard-library surface including
 `malloc`/`calloc`/`realloc`/`free`, so llvmz80 now runs stdcbench end-to-end.
 
+**"Full coverage" note — there is no float module to enable.**  stdcbench 0.8
+implements only **two** modules, c90base and c90lib.  The other two, **c90float**
+and **c90double**, are upstream placeholders marked `NOT YET IMPLEMENTED!` in
+`src/README` (their bodies just `return 0`; the floating-point module is item #1
+in `src/TODO`).  So c90base + c90lib **is** the complete implemented suite, and
+running both green under llvmz80 is full stdcbench coverage — the float/double
+modules are not disabled by a toolchain gap, they do not exist in the benchmark.
+(llvmz80 `double` support does exist separately, via `../../../llvmz80-softfloat`
+and `LLVMZ80RTLIB`, but stdcbench never calls it.)
+
 ### Caveats / known issues
 
 - **sdcc1 (`--sdcccall 1`) CHECK-FAIL.** Under `--sdcccall 1` linked against
