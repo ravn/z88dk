@@ -80,6 +80,33 @@ sdcc (`--sdcccall 0`) and ~3.25× faster than sccz80**, at a modest size cost
 (~3 % larger than sdcc0, ~10 % larger than sccz80).  Size and speed are
 different axes — sccz80 is smallest but slowest.
 
+## Per-component breakdown (`make components` / `component_timing.sh`)
+
+`compare.sh` times the whole suite; `component_timing.sh` isolates each
+sub-benchmark (BENCH_COMPONENT mode of bench_main.c: run one sub-benchmark N
+times — the same reps the driver uses, c90base 8×, c90lib 40× — gated on a
+per-part `+cpm` COMPONENT-OK check).  The parts **reconcile to the whole**:
+llvmz80 sum = 14,026,557,344 vs whole-suite 14,026,608,586 (0.0004 % apart),
+which validates the numbers.
+
+Per-component T-states (2026-08-04):
+
+| component            | reps |     llvmz80 |       sdcc0 |      sccz80 |
+| -------------------- | ---- | ----------: | ----------: | ----------: |
+| c90base_compression  |    8 | 157,419,472 | 228,113,957 | 372,938,365 |
+| c90base_isort        |    8 | 195,414,456 | 244,556,165 | 405,999,421 |
+| c90base_immul        |    8 |  62,037,336 | 337,254,013 | 571,057,021 |
+| c90lib_lnlc          |   40 | 8,604,360,200 | build-fail | build-fail  |
+| c90lib_peep          |   40 | 5,007,325,880 | build-fail | build-fail  |
+
+**Where the llvmz80 lead comes from:** almost entirely `c90base_immul`
+(integer multiply).  Of the 395 M cycles llvmz80 saves over sdcc0 on c90base,
+`immul` accounts for **69.7 %** (275 M; llvmz80 is 5.4× faster there),
+`compression` 17.9 %, `isort` 12.4 %.  The other two components are modest wins
+(1.25–1.45×).  On the full suite, c90lib dominates (lnlc alone ≈ 61 % of total
+time); sdcc/sccz80 can't be compared there because they build-fail on c90lib
+through this harness.
+
 **Full module set (c90base + c90lib) on llvmz80:** both llvmz80 lanes build and
 run the complete benchmark green (`.COM` ~29822 B, self-check `OK`, `STDCBENCH
 OK`, clean exit).  This exercises the full standard-library surface including

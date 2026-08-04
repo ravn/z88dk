@@ -26,6 +26,51 @@ extern unsigned stdcbench_error_count;
 #include <intrinsic.h>
 #endif
 
+/* ------------------------------------------------------------------------
+ * Per-component timing harness (-DBENCH_COMPONENT=<fn> -DBENCH_COMPONENT_REPS=N)
+ *
+ * Runs a SINGLE stdcbench sub-benchmark exactly N times so its cost can be
+ * isolated and z88dk-ticks-measured on its own, and so the per-component sums
+ * reconcile against the whole-suite number (each sub-benchmark is called with
+ * the same rep count the real driver uses: c90base 8x, c90lib 40x, per the
+ * call-counter clock).  Each sub-benchmark writes its own slice of the shared
+ * stdcbench_buffer before reading + self-validating, so it is correct standalone.
+ *
+ *   verify  (+cpm, no BENCH_TIMER): run N times, print COMPONENT OK/FAILED from
+ *           stdcbench_error_count -- the correctness gate for the isolated run.
+ *   timing  (+test, -DBENCH_TIMER): wrap the N calls in TIMER_START/TIMER_STOP.
+ * -------------------------------------------------------------------------- */
+#ifdef BENCH_COMPONENT
+#define BENCH_STR_(x) #x
+#define BENCH_STR(x)  BENCH_STR_(x)
+extern void BENCH_COMPONENT(void);
+#ifndef BENCH_COMPONENT_REPS
+#define BENCH_COMPONENT_REPS 8u
+#endif
+
+int main(void)
+{
+	unsigned i;
+#ifdef BENCH_TIMER
+	intrinsic_label(TIMER_START);
+	for (i = 0; i < (unsigned)BENCH_COMPONENT_REPS; i++)
+		BENCH_COMPONENT();
+	intrinsic_label(TIMER_STOP);
+	if (stdcbench_error_count == 0xffffu)   /* keep the loop live */
+		putchar(' ');
+#else
+	for (i = 0; i < (unsigned)BENCH_COMPONENT_REPS; i++)
+		BENCH_COMPONENT();
+	printf("component %s reps=%u errors=%u\n",
+	       BENCH_STR(BENCH_COMPONENT), (unsigned)BENCH_COMPONENT_REPS,
+	       stdcbench_error_count);
+	printf(stdcbench_error_count == 0 ? "COMPONENT OK\n" : "COMPONENT FAILED\n");
+#endif
+	return (0);
+}
+
+#else /* !BENCH_COMPONENT : normal whole-suite driver */
+
 int main(void)
 {
 	unsigned long score;
@@ -58,3 +103,5 @@ int main(void)
 
 	return (0);
 }
+
+#endif /* BENCH_COMPONENT */
