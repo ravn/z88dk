@@ -55,21 +55,25 @@ NTVCM=/path/to/ntvcm MODULES=all ./compare.sh   # additionally c90lib on sdcc/sc
 
 | lane        | compiler / convention                                  |
 | ----------- | ------------------------------------------------------ |
-| llvmz80-O2  | ravn/llvm-z80 GlobalISel clang, `-O2` (z80 16-bit ABI) |
-| llvmz80-Os  | same, `-Os` (identical output to `-O2` on this load)   |
+| llvmz80-O2  | ravn/llvm-z80 GlobalISel clang, `-O2` (z80 16-bit ABI; `-Os` is byte/cycle-identical on this load, so only `-O2` is run) |
 | sdcc0       | z88dk-zsdcc `-SO3`, `--sdcccall 0` (z88dk default)     |
-| sdcc1       | z88dk-zsdcc `-SO3`, `--sdcccall 1` (PATH-shim inject)  |
 | sccz80      | sccz80 `-O2`                                            |
 
 ## Results snapshot (2026-08-04, module set: c90base, @4 MHz)
 
+Fair comparison: every lane runs the **same** workload (c90base only), so this
+isolates codegen.  llvmz80 is the fastest lane by ~2x, competitive on size.
+
 | Compiler   | opt  | .COM bytes |         cycles | self-check |
 | ---------- | ---- | ---------: | -------------: | ---------- |
-| llvmz80-O2 | -O2  |      12624 |    414,888,705 | OK         |
-| llvmz80-Os | -Os  |      12624 |    414,888,705 | OK         |
+| llvmz80-O2 | -O2  |      12784 |    414,888,705 | OK         |
 | sdcc0      | -SO3 |      12289 |    809,940,171 | OK         |
-| sdcc1      | -SO3 |      12176 |              — | CHECK-FAIL |
 | sccz80     | -O2  |      11499 |  1,350,010,977 | OK         |
+
+llvmz80 opt-level scan (same c90base workload): `-O0` 13604 B / 1,166,665,008 cyc;
+`-Os` == `-O2` 12784 B / 414,888,705 cyc; `-O3` 13263 B / 414,939,625 cyc (+479 B
+over `-O2` for no measurable speed gain, so `-O2`/`-Os` is the sweet spot).
+The `sdcc1` (`--sdcccall 1`) lane is dropped (always CHECK-FAIL, see caveats).
 
 Reading it: on the c90base integer workload **llvmz80 is ~1.95× faster than
 sdcc (`--sdcccall 0`) and ~3.25× faster than sccz80**, at a modest size cost

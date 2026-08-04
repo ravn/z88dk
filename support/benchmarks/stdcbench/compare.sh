@@ -58,8 +58,9 @@ fi
 # --- lane table: name | opt-label | compiler-select flags | shim(0/1) --------
 # shim=1 injects '--sdcccall 1' via a PATH shim on z88dk-zsdcc (zcc filters it).
 LANES=(
+  # -Os and -O2 are byte- and cycle-identical on this load, so only -O2 is run
+  # (re-add an "llvmz80-Os|-Os|...-Os|0" entry if that ever stops holding).
   "llvmz80-O2|-O2 |+X -compiler=llvmz80 -O2|0"
-  "llvmz80-Os|-Os |+X -compiler=llvmz80 -Os|0"
   "sdcc0     |-SO3|+X -compiler=sdcc -SO3|0"
   # sdcc1 (--sdcccall 1) dropped: always CHECK-FAIL against z88dk's sdcccall(0)
   # precompiled clib (c90base_immul/isort miscompile) -- not a trustworthy lane.
