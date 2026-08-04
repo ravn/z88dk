@@ -61,7 +61,8 @@ LANES=(
   "llvmz80-O2|-O2 |+X -compiler=llvmz80 -O2|0"
   "llvmz80-Os|-Os |+X -compiler=llvmz80 -Os|0"
   "sdcc0     |-SO3|+X -compiler=sdcc -SO3|0"
-  "sdcc1     |-SO3|+X -compiler=sdcc -SO3|1"
+  # sdcc1 (--sdcccall 1) dropped: always CHECK-FAIL against z88dk's sdcccall(0)
+  # precompiled clib (c90base_immul/isort miscompile) -- not a trustworthy lane.
   "sccz80    |-O2 |+X -compiler=sccz80 -O2|0"
 )
 

@@ -93,10 +93,11 @@ and `LLVMZ80RTLIB`, but stdcbench never calls it.)
 
 ### Caveats / known issues
 
-- **sdcc1 (`--sdcccall 1`) CHECK-FAIL.** Under `--sdcccall 1` linked against
+- **sdcc1 (`--sdcccall 1`) lane dropped.** Under `--sdcccall 1` linked against
   z88dk's `--sdcccall 0` precompiled clib, `c90base_immul` and `c90base_isort`
   fail stdcbench's result validation (miscompile).  Not a trustworthy lane for
-  this benchmark; kept in the table so the failure is visible, not hidden.
+  this benchmark, so it is no longer built (removed from `LANES` in
+  `compare.sh`); re-add the `sdcc1|...|1` entry if you want to see the failure.
 - **c90lib now builds and runs on the llvmz80 lane** (full module set).  Both
   former llvmz80-specific blockers were fixed, and the dynamic-memory path is
   set up:
