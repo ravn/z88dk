@@ -107,6 +107,12 @@ Per-component T-states (2026-08-04):
 time); sdcc/sccz80 can't be compared there because they build-fail on c90lib
 through this harness.
 
+The `immul` gap is **not** primarily register allocation / memory traffic — it
+is middle-end interprocedural optimization: clang inlines `imul_mm` and
+constant-folds its compile-time-constant matrix product to nothing, while sdcc
+re-runs it at runtime every iteration.  Full asm-backed analysis (with the
+disproved hypotheses and a benchmark-artefact caveat): **[ANALYSIS-immul.md](ANALYSIS-immul.md)**.
+
 **Full module set (c90base + c90lib) on llvmz80:** both llvmz80 lanes build and
 run the complete benchmark green (`.COM` ~29822 B, self-check `OK`, `STDCBENCH
 OK`, clean exit).  This exercises the full standard-library surface including
