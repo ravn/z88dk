@@ -183,8 +183,9 @@ DE=endptr, BC=base`; the bridge only reads `base` off the stack into BC).
    worker — **no asm bridge, and no `ex de,hl`** (the worker returns HL and clang
    adds the `ex de,hl` itself). This is the maintainer-preferred "least asm"
    style and is what the **stdio FILE\* layer** uses (fopen/freopen/fread/fwrite/
-   fclose/ftell/fseek/rename/remove in `include/stdio.h`). It is only possible
-   when a classic `__smallc` GLOBAL worker with the matching semantics exists.
+   fclose/ftell/fseek/rename/remove, plus fputs/fgets/ungetc/fgetpos added for
+   ravn/z88dk#22, in `include/stdio.h`). It is only possible when a classic
+   `__smallc` GLOBAL worker with the matching semantics exists.
 
 Preferred order stays: annotation (Strategy B) > tiny `defc` alias > hand-asm
 bridge (Strategy A). Strategy A is only needed when the target function is not a
