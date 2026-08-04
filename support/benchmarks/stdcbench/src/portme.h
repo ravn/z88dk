@@ -19,6 +19,32 @@ typedef unsigned long stdcbench_clock_t;
 
 #define STDCBENCH_CLOCKS_PER_SEC 1
 
+/* Heap setup for the c90lib (standard-library) module, which uses
+ * malloc/calloc/realloc/free (c90lib-lnlc allocates up to ~1.2 KB per graph;
+ * c90lib-peep/htab grows a hash table via realloc).  Under ravn/llvm-z80 +cpm
+ * the classic clib needs an explicit heap: without one, malloc returns NULL,
+ * the kernels take their "malloc() failed" error path repeatedly and the run
+ * neither validates nor finishes in a sane ticks budget.
+ *
+ * The natural choice would be the WHOLE free TPA -- everything from the end of
+ * BSS up to SP (the bottom of BDOS) -- via the crt's dynamic heap models
+ * (CRT_STACK_SIZE, or -DAMALLOC in crt_init_heap.inc).  That is BLOCKED for now
+ * by a classic-malloc/llvmz80 heap-init bug: every dynamic (BSS_END..SP) model
+ * fails the full run (CRT_STACK_SIZE registers a bogus ~200 KB arena starting
+ * mid-program -> address wraparound -> warm-boot loop; -DAMALLOC registers a
+ * seemingly-sane ~29 KB arena yet still takes the malloc()-failed path), while
+ * a FIXED BSS heap of the SAME size works.  Tracked in ravn/z88dk#40.
+ *
+ * Until that is fixed, use a fixed BSS heap (CLIB_MALLOC_HEAP_SIZE).  24 KB
+ * covers the benchmark's peak live set with margin: fixed heaps of 16/20/24/28
+ * KB all PASS (score 480); 32 KB makes the image large enough that the
+ * downward stack collides with the heap and the run hangs, so 24 KB leaves
+ * headroom on both sides.  Other compilers manage their own heap, so this is
+ * llvmz80-only. */
+#if defined(__LLVMZ80)
+#pragma define CLIB_MALLOC_HEAP_SIZE=24576
+#endif
+
 /* Integer-only modules: exercise codegen + the standard library, no float.
  *
  * Module selection can be overridden from the build (so lanes that hit a

@@ -45,8 +45,8 @@ report cycles for a fixed workload, which is more precise on an emulator.)
 export LLVMZ80EXE=/path/to/llvm-z80/build-*/bin/clang    # for the llvmz80 lanes
 export PATH=/path/to/z88dk/bin:$PATH
 export ZCCCFG=/path/to/z88dk/lib/config
-NTVCM=/path/to/ntvcm ./compare.sh          # c90base (comparable headline)
-NTVCM=/path/to/ntvcm MODULES=all ./compare.sh   # + c90lib (sdcc/sccz80 only)
+NTVCM=/path/to/ntvcm ./compare.sh          # c90base (all lanes) + c90lib (llvmz80)
+NTVCM=/path/to/ntvcm MODULES=all ./compare.sh   # additionally c90lib on sdcc/sccz80
 ```
 
 `make sweep` / `make clean` wrap the same thing.
@@ -76,23 +76,37 @@ sdcc (`--sdcccall 0`) and ~3.25× faster than sccz80**, at a modest size cost
 (~3 % larger than sdcc0, ~10 % larger than sccz80).  Size and speed are
 different axes — sccz80 is smallest but slowest.
 
+**Full module set (c90base + c90lib) on llvmz80:** both llvmz80 lanes build and
+run the complete benchmark green (`.COM` ~29822 B, self-check `OK`, `STDCBENCH
+OK`, clean exit).  This exercises the full standard-library surface including
+`malloc`/`calloc`/`realloc`/`free`, so llvmz80 now runs stdcbench end-to-end.
+
 ### Caveats / known issues
 
 - **sdcc1 (`--sdcccall 1`) CHECK-FAIL.** Under `--sdcccall 1` linked against
   z88dk's `--sdcccall 0` precompiled clib, `c90base_immul` and `c90base_isort`
   fail stdcbench's result validation (miscompile).  Not a trustworthy lane for
   this benchmark; kept in the table so the failure is visible, not hidden.
-- **c90lib module blocked on the llvmz80 lane** (so the headline uses c90base
-  only, symmetrically, to keep lanes comparable — stdcbench `RULES`):
-  1. `c90lib-lnlc.c` → **clang backend segfault** at `-O2/-Os` in the
-     `aggressive-instcombine` pass on function `add` (`-O0/-O1` fine).  See
+- **c90lib now builds and runs on the llvmz80 lane** (full module set).  Both
+  former llvmz80-specific blockers were fixed, and the dynamic-memory path is
+  set up:
+  1. `c90lib-lnlc.c` → the clang backend segfault at `-O2/-Os` in the
+     `aggressive-instcombine` pass was fixed upstream in ravn/llvm-z80
+     (`TruncInstCombine.cpp` cyclic-`and` rollback guard + lit test).  See
      `bugs/README.md` + the self-contained `bugs/c90lib-lnlc-O2-crash.i`.
-  2. `c90lib-peep.c` → **z88dk `z80asm` cannot parse** the large `.asciz`
-     peephole-rules string clang emits (same class as the known
-     `s_countLeadingZeros8.c` 256-byte-table limitation; only the llvmz80 path
-     uses `z80asm`).
-  Both compile fine under sdcc/sccz80, so `MODULES=all` exercises c90lib on
-  those lanes.
+  2. `c90lib-peep.c` → the z88dk `z80asm` `.asciz` overflow was fixed in
+     `lib/llvmz80/splitascii.pl` (it now splits oversized `.asciz` as well as
+     `.ascii`, same class as the `s_countLeadingZeros8.c` 256-byte-table limit).
+  3. **Heap / dynamic memory** — c90lib uses `malloc`/`calloc`/`realloc`/`free`.
+     `src/portme.h` sets `CLIB_MALLOC_HEAP_SIZE=16384` for `__LLVMZ80`, and
+     `malloc.h` routes all four allocators to the register-ABI `*_callee` /
+     `*_fastcall` entries.  `realloc` needed a reversed-arg macro swap
+     (`realloc_callee(size, p)`) because clang pushes `__smallc __z88dk_callee`
+     args right-to-left while the classic `_callee` asm expects left-to-right —
+     the same per-function header-swap pattern z88dk already uses for
+     `qsort`/`bsearch`.  Regression test: `test/clang/runtime_realloc.{c,sh}`.
+
+  The other lanes still need `MODULES=all` to exercise c90lib.
 
 ## Layout
 

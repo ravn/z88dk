@@ -78,7 +78,7 @@ extern void __LIB__    mallinfo_callee(unsigned int *total, unsigned int *larges
 #define free(x)        free_fastcall(x)
 #define sbrk(a,b)      sbrk_callee(a,b)
 #define calloc(a,b)    calloc_callee(a,b)
-#define realloc(a,b)   realloc_callee(a,b)
+#define realloc(a,b)   realloc_callee(b,a)  /* args swapped: clang pushes __smallc right-to-left (1st arg on top) but the classic _callee asm expects 1st arg deepest; swapping presents (p,size) in the order asm_realloc wants (hl=p, bc=size).  calloc_callee is masked by commutativity; realloc is not. */
 #define mallinfo(a,b)  mallinfo_callee(a,b)
 #endif
 
@@ -93,13 +93,27 @@ extern void __LIB__    mallinfo_callee(unsigned int *total, unsigned int *larges
  * = sdcccall(0)+z80_callee, clang-honored, already in the classic clib) exactly
  * like the non-__STDC_ABI_ONLY path above -- this replaces the __calloc.asm
  * bridge, which referenced a raw user-provided _heap and failed to link under
- * the auto-managed heap that malloc_fastcall uses.  sccz80/sdcc unaffected. */
+ * the auto-managed heap that malloc_fastcall uses.
+ *
+ * realloc: the __ZPROTO reversed-arg form resolves to `___realloc`, the classic
+ * CALLER-linkage entry that `pop`s its args off the STACK -- but clang passes
+ * (p,size) in registers (de=p, hl=size), so `___realloc` pops the return
+ * address + stack garbage as the args and hands `asm_realloc` a bogus old
+ * pointer/size.  Observed: `realloc(p,300)` on a block holding "hello" returned
+ * a pointer to 0xff garbage (old data lost) and then corrupted the heap enough
+ * to hang the program at exit (stdcbench c90lib Safe_realloc, 2026-08-04).  Fix
+ * = route to realloc_callee, the __smallc __z88dk_callee register/callee ABI
+ * entry clang honors, exactly like calloc_callee above.  mallinfo/sbrk are
+ * unused by the benchmark and keep their __ZPROTO forms for now.
+ * sccz80/sdcc unaffected. */
 extern void __LIB__    *malloc_fastcall(unsigned int size) __z88dk_fastcall;
 extern void __LIB__    free_fastcall(void *addr) __z88dk_fastcall;
 extern void __LIB__    *calloc_callee(unsigned int nobj, unsigned int size) __smallc __z88dk_callee;
+extern void __LIB__    *realloc_callee(unsigned int size, void *p) __smallc __z88dk_callee;
 #define malloc(x)      malloc_fastcall(x)
 #define free(x)        free_fastcall(x)
 #define calloc(a,b)    calloc_callee(a,b)
+#define realloc(a,b)   realloc_callee(b,a)  /* args swapped: clang pushes __smallc right-to-left (1st arg on top) but the classic _callee asm expects 1st arg deepest; swapping presents (p,size) in the order asm_realloc wants (hl=p, bc=size).  calloc_callee is masked by commutativity; realloc is not. */
 #endif
 
 // The following is to allow programs using the
