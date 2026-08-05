@@ -18,13 +18,14 @@ endif
 # following the existing per-compiler SUBDIRS convention above (80cc opts
 # INTO extra suites; llvmz80 opts OUT of one it cannot support).
 #
-# recordbench is excluded as an XFAIL: recordbench.c has signed-integer-overflow
-# UB in churn() (two masked int fields summed to <=0xfffe, exceeding INT_MAX on
-# 16-bit int, THEN masked with & 0x7fff). clang legitimately emits `add nsw` and
-# InstCombine drops the now-redundant mask, so the checksum differs (37157 vs the
-# host-verified 4389). This is a bug in the TEST, not the compiler; sccz80 passes
-# only by not exploiting the nsw. Tracked in ravn/z88dk#38 -- re-include this suite
-# once recordbench.c is made UB-free (unsigned int fields).
+# recordbench was previously excluded as an XFAIL: recordbench.c had
+# signed-integer-overflow UB in churn() (two masked int fields summed to
+# <=0xfffe, exceeding INT_MAX on 16-bit int, THEN masked with & 0x7fff). clang
+# legitimately emitted `add nsw` and InstCombine dropped the now-redundant mask,
+# so the checksum differed (37157 vs the host-verified 4389). This was a bug in
+# the TEST, not the compiler. FIXED in ravn/z88dk#38 by making the struct fields
+# `unsigned int` (well-defined modular wrap on both 16-bit and 32-bit int), so
+# recordbench is no longer excluded here.
 #
 # zx is excluded because every one of its 13 .c files is a thin C wrapper around
 # a classic-clib `#asm ... #endasm` inline-assembly block (INCLUDE of the z80
@@ -34,7 +35,7 @@ endif
 # routines, not C codegen, so there is nothing for the clang backend to compile;
 # exclude the whole suite (same rationale as far -- unsupportable, not a bug).
 ifeq ($(COMPILER),llvmz80)
-SUBDIRS := $(filter-out far recordbench zx,$(SUBDIRS))
+SUBDIRS := $(filter-out far zx,$(SUBDIRS))
 endif
 
 

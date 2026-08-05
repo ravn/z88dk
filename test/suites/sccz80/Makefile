@@ -21,7 +21,8 @@ CFILES = $(wildcard *.c)
 # ravn/llvm-z80: these four suites hard-code sccz80-specific ABI or rely on
 # non-standard / UB semantics, so their assertions legitimately fail under the
 # standards-correct llvmz80 backend -- there is no backend behaviour to match
-# (same rationale as far/recordbench; UB items tracked under ravn/z88dk#38):
+# (same rationale as far; UB items tracked under ravn/z88dk#38 -- recordbench's
+# own UB has since been fixed to unsigned int and it is re-included):
 #   sizeof.c    sizeof(double)==6 (sccz80 48-bit double; llvmz80 +test = 4) and
 #               3-byte `far` pointers (far is unsupported under llvmz80).
 #   offsetof.c  bare `test_s` tag (non-standard; clang requires `struct test_s`)
