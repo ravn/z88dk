@@ -12,6 +12,14 @@ CFLAGS += -DMAX_TESTS=300 -DNO_LOG_RUNNING -DNO_LOG_PASSED
 
 ifeq ($(COMPILER),xcc)
 all:	test.bin test_newlib.bin
+else ifeq ($(COMPILER),llvmz80)
+# test_newlib.bin pulls in qsort_newlib.c / main_newlib.c, which configure the
+# newlib sort cores via a classic-clib `#asm ... DEFC __CLIB_OPT_SORT_QSORT ...`
+# block -- clang / -compiler=llvmz80 has no `#asm` directive and fails at
+# preprocessing. The classic-clib primary (test.bin) covers the C-level stdlib
+# surface under llvmz80; the newlib inline-asm config binary is unsupportable
+# here (same rationale as the far suite), so build only test.bin.
+all:	test.bin
 else
 all:	test.bin test_r2ka.bin test_8080.bin test_ez80_z80.bin \
 	test_z180.bin test_z80n.bin test_kc160.bin \

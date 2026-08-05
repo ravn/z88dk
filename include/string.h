@@ -283,7 +283,7 @@ extern int __LIB__ strncasecmp_callee(const char *s1,const char *s2,size_t n) __
 #define strncasecmp(a,b,c) strncasecmp_callee(a,b,c)
 #endif
 
-__ZPROTO3(int,,strncat,char *,dst,const char *,src,size_t,n)
+__ZPROTO3(char,*,strncat,char *,dst,const char *,src,size_t,n)
 #if !__GBZ80 && !defined(__STDC_ABI_ONLY)
 extern char __LIB__ *strncat_callee(char *dst,const char *src,size_t n) __smallc __z88dk_callee;
 #define strncat(a,b,c) strncat_callee(a,b,c)
@@ -293,6 +293,15 @@ __ZPROTO3(char,*,strnchar,const char *,s,size_t,n,int,c)
 #if !__GBZ80 && !defined(__STDC_ABI_ONLY)
 extern char __LIB__ *strnchr_callee(const char *s,size_t n,int c) __smallc __z88dk_callee;
 #define strnchr(a,b,c) strnchr_callee(a,b,c)
+#elif defined(__LLVMZ80)
+// llvmz80/clang: expose the standard name strnchr, routed to the register-ABI
+// bridge that the strnchar ZPROTO3 declares (asm ___strnchar).  The plain
+// ___strnchr alias is a stack-ABI entry and would be miscalled by clang, so we
+// forward to strnchar rather than declaring strnchr via __ZPROTO3 directly.
+// A real (inline) function -- not a macro -- so a later `#undef strnchr` in
+// portable test code leaves the name callable, matching sccz80/sdcc.
+__attribute__((always_inline)) static inline
+char *strnchr(const char *s, size_t n, int c) { return strnchar(s, n, c); }
 #endif
 
 

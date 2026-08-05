@@ -406,6 +406,9 @@ int suite_math()
     suite_add_test(test_float_arithmetic);
     suite_add_test(test_reciprocal);
     suite_add_test(test_sqrt);
+    /* pow/fmod were XFAIL under llvmz80 while #278 (clang sdcccall(0) reversed
+     * multi-arg stack order vs SDCC) was open; resolved by z80_smallc (#279),
+     * so they pass on every compiler now -- no per-compiler split. */
     suite_add_test(test_pow);
 #ifndef MATH16
     suite_add_test(test_fmod);

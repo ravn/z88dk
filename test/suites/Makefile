@@ -13,6 +13,30 @@ ifeq ($(COMPILER),80cc)
 SUBDIRS += long_ir debuginfo
 endif
 
+# ravn/llvm-z80 (compiler=llvmz80) does not support far pointers, so the far
+# suite (sbrk_far/*_far) has no way to build under it -- exclude it here,
+# following the existing per-compiler SUBDIRS convention above (80cc opts
+# INTO extra suites; llvmz80 opts OUT of one it cannot support).
+#
+# recordbench is excluded as an XFAIL: recordbench.c has signed-integer-overflow
+# UB in churn() (two masked int fields summed to <=0xfffe, exceeding INT_MAX on
+# 16-bit int, THEN masked with & 0x7fff). clang legitimately emits `add nsw` and
+# InstCombine drops the now-redundant mask, so the checksum differs (37157 vs the
+# host-verified 4389). This is a bug in the TEST, not the compiler; sccz80 passes
+# only by not exploiting the nsw. Tracked in ravn/z88dk#38 -- re-include this suite
+# once recordbench.c is made UB-free (unsigned int fields).
+#
+# zx is excluded because every one of its 13 .c files is a thin C wrapper around
+# a classic-clib `#asm ... #endasm` inline-assembly block (INCLUDE of the z80
+# .asm display routines under test). clang / -compiler=llvmz80 has no `#asm`
+# preprocessor directive, so each file fails at preprocessing with
+# "invalid preprocessing directive". These tests exercise z80 asm library
+# routines, not C codegen, so there is nothing for the clang backend to compile;
+# exclude the whole suite (same rationale as far -- unsupportable, not a bug).
+ifeq ($(COMPILER),llvmz80)
+SUBDIRS := $(filter-out far recordbench zx,$(SUBDIRS))
+endif
+
 
 all: subdirs-all
 

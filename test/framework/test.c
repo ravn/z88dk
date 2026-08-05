@@ -12,6 +12,7 @@ typedef struct {
     const char     *name;
     const char     *testnames[MAX_TESTS];
     void     *tests[MAX_TESTS];
+    char      xfail[MAX_TESTS];   /* 1 => test is expected to fail (XFAIL) */
     int       num_tests;
     void    (*setup)(void);
     void    (*teardown)(void);
@@ -25,6 +26,8 @@ static char   *failed_file;
 static int     failed_line;
 static int     passed;
 static int     failed;
+static int     xfailed;   /* expected failures that did fail (OK) */
+static int     xpassed;   /* expected failures that unexpectedly passed (bad) */
 
 void Assert_real(int result, char *file, int line, char *message)
 {
@@ -46,6 +49,7 @@ int suite_run(void)
     void    (*func)(void);
 
     passed = failed = 0;
+    xfailed = xpassed = 0;
 
     printf("Starting suite %s (%d tests)\n",suite.name, suite.num_tests);
 
@@ -66,6 +70,16 @@ int suite_run(void)
             if ( suite.teardown ) {
                 suite.teardown();
             }
+            if ( suite.xfail[i] ) {
+                /* expected to fail but passed -> XPASS: fail the suite so the
+                 * marker is removed once the underlying bug is fixed. */
+#ifdef NO_LOG_RUNNING
+                printf("Running test %s..",suite.testnames[i]);
+#endif
+                printf("...XPASS (expected failure but passed)\n");
+                xpassed++;
+                failed++;
+            } else {
 #ifndef NO_LOG_PASSED
 #ifdef NO_LOG_RUNNING
             printf("Running test %s..",suite.testnames[i]);
@@ -73,6 +87,7 @@ int suite_run(void)
             printf("...passed\n");
 #endif
             passed++;
+            }
         } else {
             extra = "";
             switch ( stage ) {
@@ -96,12 +111,25 @@ int suite_run(void)
 #ifdef NO_LOG_RUNNING
             printf("Running test %s..",suite.testnames[i]);
 #endif
-            printf("...failed %s%s:%d (%s)%s\n",extra,failed_file, failed_line, failed_message,stage == 3 ? " (and in teardown)" : "");
-            failed++;
+            if ( suite.xfail[i] ) {
+                /* expected failure -> report and do NOT fail the suite */
+                printf("...xfail %s%s:%d (%s)%s\n",extra,failed_file, failed_line, failed_message,stage == 3 ? " (and in teardown)" : "");
+                xfailed++;
+            } else {
+                printf("...failed %s%s:%d (%s)%s\n",extra,failed_file, failed_line, failed_message,stage == 3 ? " (and in teardown)" : "");
+                failed++;
+            }
         }
     }
 
-    printf("%d run, %d passed, %d failed\n", suite.num_tests, passed, failed);
+    printf("%d run, %d passed, %d failed", suite.num_tests, passed, failed);
+    if ( xfailed ) {
+        printf(", %d xfail", xfailed);
+    }
+    if ( xpassed ) {
+        printf(", %d XPASS", xpassed);
+    }
+    printf("\n");
 
     return failed != 0;
 }
@@ -122,6 +150,18 @@ void suite_add_test_real(char *testname, void (*test)(void))
     i = suite.num_tests++;
     suite.testnames[i] = testname;
     suite.tests[i] = test;
+    suite.xfail[i] = 0;
+}
+
+
+void suite_add_xfail_test_real(char *testname, void (*test)(void))
+{
+    int    i;
+
+    i = suite.num_tests++;
+    suite.testnames[i] = testname;
+    suite.tests[i] = test;
+    suite.xfail[i] = 1;
 }
 
 

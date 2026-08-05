@@ -23,8 +23,9 @@ ENDIF
 ; asm_stricmp = asm_strcasecmp; enter: HL=s2, DE=s1 -- already correct.
 IF __CLASSIC
 PUBLIC ___stricmp
+EXTERN asm_strcasecmp
 ___stricmp:
-   call strcasecmp          ; enter HL=s2, DE=s1; exit A=diff (uses existing EXTERN)
+   call asm_strcasecmp      ; enter HL=s2, DE=s1; exit A=diff
    ex de,hl                 ; DE = result (C return value, sign-extends in A)
    ret
 ENDIF

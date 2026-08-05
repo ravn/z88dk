@@ -25,6 +25,7 @@
 #define __at(x)
 #define __sfr
 #define __vasmallc
+#define __z88dk_callback
 
 #else
 
@@ -39,6 +40,35 @@
 #define __stdc
 #define __z88dk_deprecated
 #define __z88dk_sdccdecl
+
+// __z88dk_callback marks a function that CLASSIC-LIBRARY code calls back into --
+// a user callback reached through a library thunk, e.g. a qsort()/bsearch()
+// comparator, or funopen()'s read/write/seek/close hooks.  The library invokes
+// such callbacks with SDCC's DEFAULT calling convention: arguments pushed
+// RIGHT-TO-LEFT (first argument nearest the return address), result returned in
+// HL.  That is how the hand-written / SDCC-compiled comparator thunks in the
+// classic clib (e.g. l_cmp_sdcc in classic/stdlib/_qsort.asm) pass the operands.
+//
+//   * sccz80 and sdcc: their OWN default already IS that convention, so the
+//     macro is EMPTY -- a plain callback is already called correctly.
+//   * llvmz80 / clang: clang's default is sdcccall(1) (arguments in registers),
+//     which does NOT match, so the macro is overridden below to
+//     __attribute__((sdcccall(0))) to pin the library's convention.
+//
+// It is deliberately NOT __smallc.  __smallc means z80_smallc (arguments pushed
+// LEFT-TO-RIGHT) -- the MIRROR of sdcccall(0) for a multi-argument call -- so a
+// __smallc comparator would receive its two operands swapped and INVERT the sort
+// (verified at runtime: qsort produced a descending array).  It is also not the
+// clang default (sdcccall(1), register args), which the thunk does not honour.
+//
+// Usage: put __z88dk_callback on the callback's definition AND on the matching
+// function-pointer parameter type:
+//     __z88dk_callback int cmp(const void *a, const void *b) { ... }
+//     qsort(base, n, size, cmp);
+// The single macro replaces a per-callback #ifdef and is empty for sccz80/sdcc,
+// so the same source is portable across all three compilers.
+// See ravn/llvm-z80#279, ravn/z88dk#41, ravn/z88dk#22.
+#define __z88dk_callback
 
 #if __SDCC
 // __smallconly is for functions that only come in a smallc variant
@@ -83,22 +113,34 @@
 // Backend mechanism pinned by llvm/test/CodeGen/Z80/z88dk-callee.ll; frontend
 // mapping by clang/test/CodeGen/z80-callee.c.  End-to-end validation against a
 // real clib link is Phase C.
-#define __smallc __attribute__((sdcccall(0)))
+// __smallc maps to the z80_smallc attribute: arguments pushed LEFT-TO-RIGHT
+// (last arg nearest the return address), CALLER cleans the stack -- byte-for-byte
+// the SDCC/sccz80 __smallc layout (CallingConv::Z80_SmallC, ravn/llvm-z80#279).
+// This is what the classic clib workers are compiled with, so a multi-arg
+// __smallc declaration now calls them correctly with no reversed-param header
+// bridge (fixes the register-vs-stack ABI class ravn/z88dk#22/#41).  Earlier this
+// was wired to sdcccall(0) (right-to-left), which happened to work only for the
+// 1-argument console workers where the two orders coincide.
+#define __smallc __attribute__((z80_smallc))
 #define __z88dk_callee __attribute__((z80_callee))
 #define __z88dk_fastcall __attribute__((z80_fastcall))
 
 // ravn/z88dk#31: the variadic stdio family (printf/sprintf/scanf/...) returns
-// its count in HL (the classic clib convention).  llvmz80's default sdcccall(1)
-// reads a 16-bit return from DE, so an unannotated variadic decl reads garbage
-// (the count is wrong; formatting/parsing are fine because varargs are stacked
-// either way).  Declaring the family __smallc == sdcccall(0) makes clang read
-// the return from HL, matching the worker.  The sccz80 branch already sets
-// `__vasmallc __smallc`; it was simply missing for llvmz80 when __smallc was
-// wired to sdcccall(0).  Guarded to __LLVMZ80: ez80-clang (__stdc, HL return)
-// is already correct and must not be touched (it may not support sdcccall).
+// its count in HL (the classic clib convention) and its varargs are pushed
+// RIGHT-TO-LEFT so the fixed format arg is reachable.  That is exactly
+// sdcccall(0), NOT __smallc -- now that __smallc means z80_smallc (left-to-right)
+// the two are no longer interchangeable, so __vasmallc must pin sdcccall(0)
+// explicitly.  Guarded to __LLVMZ80: ez80-clang (__stdc, HL return) is already
+// correct and must not be touched (it may not support sdcccall).
 #if defined(__LLVMZ80)
 #undef  __vasmallc
-#define __vasmallc __smallc
+#define __vasmallc __attribute__((sdcccall(0)))
+// See the __z88dk_callback doc above: clang's default is sdcccall(1), so pin the
+// library callback convention (sdcccall(0)) explicitly.  Left EMPTY for
+// ez80-clang/__XCC, whose default already matches and which may not support
+// sdcccall.
+#undef  __z88dk_callback
+#define __z88dk_callback __attribute__((sdcccall(0)))
 #endif
 #endif
 
@@ -108,6 +150,10 @@
 #define __smallconly __smallc
 #define __vasmallc __smallc
 #define __z88dk_deprecated
+// __z88dk_callback: see the doc in the SDCC/clang branch above.  sccz80's own
+// default calling convention already matches the classic-lib callback thunks,
+// so it is empty (and, unlike __smallc, it is not a native sccz80 keyword).
+#define __z88dk_callback
 #endif
 
 #endif

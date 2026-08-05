@@ -5,7 +5,15 @@
 
 #include "string_tests.h"
 
+#ifdef __LLVMZ80
+// clang/llvmz80 exposes stricmp/strcasecmp as default-convention (sdcccall(1))
+// inline wrappers (see string.h __ZPROTO2), so the pointer that holds them must
+// use the default convention, not __smallc.  sccz80/sdcc keep the __smallc
+// library convention below.
+static int (*func)(const char *x,const  char *y);
+#else
 static int (*func)(const char *x,const  char *y) __smallc;
+#endif
 
 void stricmp_equal_lower()
 {

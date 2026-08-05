@@ -2830,6 +2830,47 @@ void add_option_to_compiler(char *arg)
     BuildOptions(&comparg, arg);
 }
 
+/* Remove any whitespace-delimited token that begins with `prefix` from the
+ * space-separated option string `*argstr`, editing it in place.
+ *
+ * Used to drop sccz80/sdcc-only compiler flags that the llvmz80 clang driver
+ * does not understand.  Concretely, z88dk's own math test-suite passes the
+ * sccz80 double-format selector `-fp-mode=ieee` (see src/sccz80/main.c, and
+ * test/suites/math which builds test_math32.bin with `-fp-mode=ieee`).  zcc
+ * treats any flag it does not recognise as a compiler flag and forwards it
+ * verbatim (parse_cmdline_arg -> add_option_to_compiler -> comparg), so clang
+ * aborts with `error: unknown argument: '-fp-mode=ieee'`.  clang-z80 always
+ * uses IEEE-754 soft-float, so `-fp-mode=ieee` is a no-op for it and the flag
+ * is simply dropped.  A match only counts at a token boundary (start of the
+ * string or after whitespace) so an embedded substring in a path is left
+ * alone.  Example: comparg " -DMATH32 -fp-mode=ieee -lmath32 " becomes
+ * " -DMATH32 -lmath32 ". */
+static void strip_flag_prefix(char **argstr, const char *prefix)
+{
+    char   *s, *p;
+    size_t  plen;
+
+    if (argstr == NULL || *argstr == NULL || prefix == NULL)
+        return;
+    plen = strlen(prefix);
+    s = *argstr;
+    while ((p = strstr(s, prefix)) != NULL) {
+        char *end;
+        /* Only a real token if at string start or preceded by whitespace. */
+        if (p != *argstr && !isspace((unsigned char)p[-1])) {
+            s = p + plen;   /* substring match, not a token -- skip past it */
+            continue;
+        }
+        end = p + plen;
+        while (*end && !isspace((unsigned char)*end))   /* rest of the token */
+            end++;
+        while (*end && isspace((unsigned char)*end))    /* one run of trailing ws */
+            end++;
+        memmove(p, end, strlen(end) + 1);
+        s = p;              /* keep scanning from the splice point */
+    }
+}
+
 
 char *find_file_ext(char *filename)
 {
@@ -3550,6 +3591,12 @@ static void configure_compiler(void)
         c_cpp_exe = c_llvmz80_exe;
         compiler_style = filter_out;
         c_stylecpp = filter_out;
+
+        /* Drop the sccz80 double-format selector if the caller (e.g. z88dk's
+         * math test-suite) passed it: clang-z80 is IEEE-754-only, so
+         * -fp-mode=ieee is a no-op and any other -fp-mode=<x> is unsupported.
+         * See strip_flag_prefix() for the full rationale. */
+        strip_flag_prefix(&comparg, "-fp-mode");
     } else {
         printf("Unknown compiler type: %s\n",c_compiler_type);
         exit(1);

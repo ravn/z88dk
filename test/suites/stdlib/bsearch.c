@@ -584,11 +584,19 @@ struct lookup * b2c[LENGTH] = {
   &lookup284
 };
 
+#ifndef __LLVMZ80
+  // sccz80/sdcc: exercise the 2-byte-item l_qsort/l_bsearch cores by re-pointing
+  // qsort/bsearch at them.  Under llvmz80 qsort/bsearch are reversing macros that
+  // cannot be #undef'd to a bare name (no real `qsort` symbol exists -- a C
+  // function of that name would collide with the library _qsort it wraps), so we
+  // keep the normal reversing macros: the call sites below pass
+  // size==sizeof(struct lookup*)==2, i.e. exactly the l_qsort/l_bsearch case.
   #undef qsort
   #define qsort(a,b,c,d) l_qsort(a,b,d)
   #define bsearch(a,b,c,d,e) l_bsearch(a,b,c,e)
+#endif
 
-int sortBytes(const void* a, const void* b) {
+__smallc int sortBytes(const void* a, const void* b) {
   unsigned char * c = ((unsigned char *)(*(struct lookup**)a)) + sizeof(int32_t);
   unsigned char * d = ((unsigned char *)(*(struct lookup**)b)) + sizeof(int32_t);
   char e = 2;
@@ -606,7 +614,7 @@ int sortBytes(const void* a, const void* b) {
   return 0;
 }
 
-int sortBytes2(const void* a, const void* b) {
+__smallc int sortBytes2(const void* a, const void* b) {
   unsigned char * c = ((unsigned char *)(*(struct lookup**)a)) + sizeof(int32_t);
   unsigned char * d = ((unsigned char *)(*(struct lookup**)b)) + sizeof(int32_t);
   char e = 2;

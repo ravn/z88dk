@@ -133,6 +133,13 @@ extern void __LIB__  srand(unsigned int seed);
 #ifndef __STDC_ABI_ONLY
 extern void __LIB__  srand_fastcall(unsigned int seed) __z88dk_fastcall;
 #define srand(x) srand_fastcall(x)
+#elif defined(__LLVMZ80)
+/* ravn/llvm-z80: route srand to srand_fastcall for the register ABI (z80_fastcall
+ * = HL in, matching asm_srand). Verified: srand(42) then rand() gave a different
+ * value than srand_fastcall(42) then rand() -- the plain entry's `pop` reads
+ * garbage off the stack instead of the register-passed seed. See abs above. */
+extern void __LIB__  srand_fastcall(unsigned int seed) __z88dk_fastcall;
+#define srand(x) srand_fastcall(x)
 #endif
 
 // Not sure why Rex has it's own rand() routine using different seed?
@@ -168,9 +175,12 @@ extern void __LIB__  exit_fastcall(int status) __z88dk_fastcall;
 extern int  __LIB__  atexit_fastcall(void (*func)(void)) __z88dk_fastcall;
 #define exit(x) exit_fastcall(x)
 #define atexit(x) atexit_fastcall(x)
-#elif defined(__clang__)
-/* clang: __z88dk_fastcall maps to z80_fastcall (single arg in HL).
-   exit_fastcall expects HL=status; atexit_fastcall expects HL=func ptr. */
+#elif defined(__LLVMZ80)
+/* llvmz80/clang: __z88dk_fastcall maps to z80_fastcall (single arg in HL).
+   exit_fastcall expects HL=status; atexit_fastcall expects HL=func ptr.
+   Guarded to __LLVMZ80 (not __clang__) so ez80-clang, which shares __clang__
+   but may not support these z80 attributes, is left untouched -- see the same
+   rule in sys/compiler.h. */
 extern void __LIB__  exit_fastcall(int status) __z88dk_fastcall;
 extern int  __LIB__  atexit_fastcall(void (*func)(void)) __z88dk_fastcall;
 #define exit(x) exit_fastcall(x)
@@ -209,30 +219,14 @@ extern   int optreset;
 // One shared search/sort core.  sccz80 links the bare names (__LIB__), sdcc the
 // _-prefixed ones; each entry embeds its own comparator thunk, so a single
 // classic library serves both compilers (see classic/stdlib/{qsort,bsearch}.asm).
-#if defined(__LLVMZ80)
-// ravn/llvm-z80: clang's __smallc == sdcccall(0) pushes arguments right-to-left,
-// but the shared _qsort/_bsearch library entries expect the z88dk __smallc
-// left-to-right push order (base/key deepest, compar on top -- see
-// classic/stdlib/{qsort,_qsort,bsearch,_bsearch}.asm).  Bind a reversed-argument
-// alias directly to the existing library symbol (via an __asm() label, so no
-// separate bridge module is needed) and swap the order back with a macro so the
-// pushed stack layout matches what the asm entry reads.  The comparator MUST be
-// __smallc: the l_cmp_sdcc thunk marshals its two operands on the stack, not in
-// registers, so a default (sdcccall(1)) comparator would be miscalled.
-extern void  __qsort_llvmz80(int (*compar)(const void *, const void *) __smallc,
-                             unsigned int size, unsigned int nmemb, void *base)
-    __smallc __asm("qsort");
-#define qsort(base, nmemb, size, compar) \
-    __qsort_llvmz80((compar), (size), (nmemb), (base))
-extern void *__bsearch_llvmz80(int (*compar)(const void *, const void *) __smallc,
-                               unsigned int size, unsigned int nmemb, void *base, void *key)
-    __smallc __asm("bsearch");
-#define bsearch(key, base, nmemb, size, compar) \
-    __bsearch_llvmz80((compar), (size), (nmemb), (base), (key))
-#else
-extern void __LIB__   qsort(void *base, unsigned int nmemb, unsigned int size, int (*compar)(const void *, const void *)) __smallc;
-extern void __LIB__  *bsearch(void *key, void *base, unsigned int nmemb, unsigned int size, int (*compar)(const void *, const void *)) __smallc;
-#endif
+//
+// qsort/bsearch's OWN arguments are natural-order __smallc for every compiler.
+// The comparator CALLBACK is invoked by the library's sort/search thunk with the
+// classic-lib callback convention -- carried by __z88dk_callback (defined and
+// documented in <sys/compiler.h>): empty for sccz80/sdcc, sdcccall(0) for
+// llvmz80.  So the declarations, and any user comparator, need no #ifdef here.
+extern void __LIB__   qsort(void *base, unsigned int nmemb, unsigned int size, int (*compar)(const void *, const void *) __z88dk_callback) __smallc;
+extern void __LIB__  *bsearch(void *key, void *base, unsigned int nmemb, unsigned int size, int (*compar)(const void *, const void *) __z88dk_callback) __smallc;
 
 // l_qsort()/l_bsearch() operate on arrays of 2-byte items (pointers/ints),
 // sharing the one core rather than a separate little implementation.
@@ -339,6 +333,14 @@ extern uint __LIB__  isqrt(uint n);
 #ifndef __STDC_ABI_ONLY
 extern uint __LIB__  isqrt_fastcall(uint n) __z88dk_fastcall;
 #define isqrt(x) isqrt_fastcall(x)
+#elif defined(__LLVMZ80)
+/* ravn/llvm-z80: route isqrt to isqrt_fastcall for the register ABI
+ * (z80_fastcall = HL in/out, matching asm_isqrt).  Without this, clang's
+ * default sdcccall(1) register-passes n but isqrt.asm pops it off the
+ * stack (smallc convention) -- isqrt() then always returns 45.  See abs
+ * above for the established pattern. */
+extern uint __LIB__  isqrt_fastcall(uint n) __z88dk_fastcall;
+#define isqrt(x) isqrt_fastcall(x)
 #endif
 
 
@@ -356,6 +358,14 @@ extern uint __LIB__  isqrt_fastcall(uint n) __z88dk_fastcall;
 
 extern unsigned int  __LIB__  inp(unsigned int port);
 #ifndef __STDC_ABI_ONLY
+extern unsigned int  __LIB__  inp_fastcall(unsigned int port) __z88dk_fastcall;
+#define inp(p) inp_fastcall(p)
+#elif defined(__LLVMZ80)
+/* ravn/llvm-z80: route inp to inp_fastcall for the register ABI (z80_fastcall
+ * = HL in/out, matching asm_inp). inp.asm's plain entry does `pop de; pop hl`
+ * expecting a stack-passed port, but llvmz80 passes port in HL only (verified
+ * via -S: `ld hl,<port> / call _inp`, no stack push) -- the pop corrupts HL
+ * with whatever is below the return address. See abs above. */
 extern unsigned int  __LIB__  inp_fastcall(unsigned int port) __z88dk_fastcall;
 #define inp(p) inp_fastcall(p)
 #endif
@@ -402,10 +412,24 @@ extern int __LIB__ __SAVEFRAME__     sleep (int secs);
 #ifndef __STDC_ABI_ONLY
 extern int __LIB__ __SAVEFRAME__     sleep_fastcall (int secs) __z88dk_fastcall;
 #define sleep(x) sleep_fastcall(x)
+#elif defined(__LLVMZ80)
+/* ravn/llvm-z80: route sleep to sleep_fastcall for the register ABI
+ * (z80_fastcall = HL in, matching asm_sleep). Same class as inp above: the
+ * plain entry pops a stack-passed arg that llvmz80 never pushes (verified
+ * via -S: `ld hl,<secs> / call _sleep`, no stack push). */
+extern int __LIB__ __SAVEFRAME__     sleep_fastcall (int secs) __z88dk_fastcall;
+#define sleep(x) sleep_fastcall(x)
 #endif
 
 extern void __LIB__ msleep(unsigned int milliseconds);
 #ifndef __STDC_ABI_ONLY
+extern int __LIB__  msleep_fastcall (unsigned int milliseconds) __z88dk_fastcall;
+#define msleep(x) msleep_fastcall(x)
+#elif defined(__LLVMZ80)
+/* ravn/llvm-z80: route msleep to msleep_fastcall for the register ABI
+ * (z80_fastcall = HL in, matching asm_z80_delay_ms). Same class as inp/sleep
+ * above (verified via -S: `ld hl,<ms> / call _msleep`, no stack push, but
+ * msleep.asm's plain entry does `pop de; pop hl`). */
 extern int __LIB__  msleep_fastcall (unsigned int milliseconds) __z88dk_fastcall;
 #define msleep(x) msleep_fastcall(x)
 #endif
@@ -434,7 +458,13 @@ extern unsigned long __LIB__   extract_bits_callee(unsigned char *data, unsigned
 __ZPROTO2(int,,wcmatch,char,*wildname,char *,filename)
 
 // Convert a BCD encoded value to unsigned int
-extern unsigned int __LIB__ unbcd(unsigned int value);
+// unbcd.c is __naked asm that pops its argument off the stack (smallc
+// convention); __smallc makes clang pass it that way too (sdcccall(0)).
+// It is a no-op for sccz80/SDCC (their own native calling-convention
+// keyword, already their default), matching the pattern used unconditionally
+// on extract_bits above.  Without it, llvmz80's default sdcccall(1)
+// register-passes the arg and unbcd() always returns 0.
+extern unsigned int __LIB__ unbcd(unsigned int value) __smallc;
 
 #ifdef __Z88__
 extern int system(const char *text);              /* should this be in the z88 library? */

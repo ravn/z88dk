@@ -18,7 +18,7 @@ static void init_numbers(int16_t val0, int16_t v_add)
    printf("...\n");
 }
 
-static int ascending_order(const void *a, const void *b)
+static int ascending_order(const void *a, const void *b) __smallc
 {
    // signed comparison is only good for |num| < 32768
    return *(const int16_t *)a - *(const int16_t *)b;

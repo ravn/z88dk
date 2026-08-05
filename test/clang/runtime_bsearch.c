@@ -24,8 +24,10 @@
 
 #define N 16
 
-/* __smallc == sdcccall(0) for clang; empty for sccz80/sdcc (source-portable). */
-__smallc int cmp(const void *a, const void *b) {
+/* The comparator carries __z88dk_callback (from <stdlib.h>): expands to
+ * __attribute__((sdcccall(0))) under llvmz80 to match the library sort/search
+ * thunk's operand order, empty for sccz80/sdcc.  No #ifdef here.  See #279. */
+__z88dk_callback int cmp(const void *a, const void *b) {
     return *(const int *)a - *(const int *)b;
 }
 
