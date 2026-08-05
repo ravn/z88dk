@@ -1,8 +1,24 @@
 # VERIFIED discrepancy: clang-z80 `sdcccall(0)` reverses multi-arg stack order vs SDCC
 
+> **RESOLVED 2026-08-05 by ravn/llvm-z80#279 (z80_smallc).** The root problem was
+> that clang's `__smallc` mapped to `sdcccall(0)` (right-to-left), the MIRROR of
+> SDCC's `__smallc` (left-to-right), so 2+ stack args were reversed.  #279 remaps
+> `__smallc` to the new `z80_smallc` convention (left-to-right, byte-identical to
+> SDCC), so multi-arg order now matches.  Verified under `-compiler=llvmz80
+> --math32`: `pow(2,3)`~8 (was 9), `fmod(5.5,2)`=1.5 (was 2), `atan2(1,0)`~pi/2
+> (was 0) -- all correct.  math32's `pow/fmod/atan2/hypot` (declared via
+> `__ZPROTO2`, now a natural-order `__smallc` prototype for clang) work with no
+> per-function workaround; the "deliberately NOT annotated" note in
+> `include/math/math_math32.h` was updated accordingly.  **ravn/llvm-z80#278 can
+> be closed as fixed by #279.**  Note the fix was NOT the originally-anticipated
+> "reverse clang's sdcccall(0) push order" backend change (that would have broken
+> the deliberate sdcccall(0) callers); it was adding a distinct left-to-right
+> `z80_smallc` convention and pointing `__smallc` at it.
+
 Status: **FILED as ravn/llvm-z80#278** 2026-08-03 (user gave explicit go-ahead).
 Root-caused + verified. Found 2026-08-03 while getting the z88dk
-`test/suites/math` suite green under `-compiler=llvmz80`.
+`test/suites/math` suite green under `-compiler=llvmz80`. **Now RESOLVED — see
+the banner above (2026-08-05).**
 
 ## Symptom
 math32 `pow`/`fmod` (non-commutative, 2-arg) compute with swapped operands

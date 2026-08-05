@@ -9,16 +9,21 @@
 // disables the __z88dk_fastcall/__z88dk_callee macro routing used below by
 // sccz80/sdcc.  The plain fallback decls are then what clang actually calls, so
 // they need an explicit calling convention: the math32 cm32_sdcc_* cores are
-// SDCC-compiled __smallc == sdcccall(0), but clang's default is sdcccall(1), so
-// an unannotated decl makes clang pass the float arg / read the result in the
-// wrong registers.  Annotate the plain decls __smallc so clang matches the
-// cores.  ONLY order-immune functions are safe here -- 1-arg (sqrt/fabs) and
-// commutative 2-arg (fmin/fmax).  Non-commutative 2-arg (pow/fmod) are
-// deliberately NOT annotated: clang's sdcccall(0) reverses multi-argument stack
-// order relative to SDCC (verified differential: isub(1000,7) = -993 sdcc /
-// +993 clang, see z88dk tasks/bug-sdcccall0-multiarg-order-2026-08-03.md), so
-// they would return swapped-operand results.  They need a backend fix, not a
-// header workaround, and are left unannotated until that lands.
+// SDCC-compiled __smallc, but clang's default is sdcccall(1), so an unannotated
+// decl makes clang pass the float arg / read the result in the wrong registers.
+// Annotate the plain decls __smallc so clang matches the cores.
+//
+// Multi-argument order is now CORRECT.  Since ravn/llvm-z80#279 clang's __smallc
+// maps to z80_smallc (arguments pushed LEFT-TO-RIGHT, byte-identical to SDCC's
+// __smallc) -- earlier it was sdcccall(0) (right-to-left), which REVERSED 2+ stack
+// args relative to SDCC and made non-commutative functions return swapped-operand
+// results (ravn/llvm-z80#278: pow(2,3)->9, fmod(5.5,2)->2).  With z80_smallc the
+// orders match, so pow/fmod/atan2/hypot (declared via __ZPROTO2, whose clang
+// branch is now a natural-order __smallc prototype) compute correctly -- verified
+// under -compiler=llvmz80 --math32: pow(2,3)~8, fmod(5.5,2)=1.5, atan2(1,0)~pi/2.
+// #278 is resolved by #279; the bug note tasks/bug-sdcccall0-multiarg-order-
+// 2026-08-03.md is kept for history.  __MATH32_ABI still applies to the plain
+// fallback decls (sqrt/fabs/fmin/fmax) that are NOT written with __ZPROTO.
 #if defined(__LLVMZ80)
 #define __MATH32_ABI __smallc
 #else
