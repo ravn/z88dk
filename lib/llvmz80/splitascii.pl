@@ -15,9 +15,9 @@
 # which does not understand `.ascii` at all -> "syntax error" with no other
 # symptom (root-caused via the sem702-flip-test font296[] build, 2026-08).
 #
-# This pre-pass runs BEFORE copt (mirroring the splitquad.pl precedent) and
-# splits any `.ascii`/`.asciz "..."` line whose EMITTED text exceeds a safe
-# threshold into several consecutive pieces, splitting only on real byte
+# This pre-pass runs BEFORE copt and splits any `.ascii`/`.asciz "..."` line
+# whose EMITTED text exceeds a safe threshold into several consecutive pieces,
+# splitting only on real byte
 # boundaries (never mid-escape), so copt sees several short lines instead of
 # one long one and its ordinary `.ascii/.asciz %1 -> DEFM %1[ + DEFB 0]` rules
 # apply to each piece unchanged.  For a split `.asciz` the implicit trailing

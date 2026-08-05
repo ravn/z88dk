@@ -6,15 +6,43 @@
 
 # Design question: how should `-compiler=llvmz80` handle 64-bit (`.quad`) global initializers?
 
-**From @ravn (human):**
+## RESOLUTION (2026-08-05, implemented) — split in the backend, no external pass
 
-_(framing to be added by ravn before this is raised with the maintainers)_
+User directive: "jeg vil helst gå efter Data64bitsDirective". Chosen and
+implemented. This is a *fourth* option, cleaner than the three debated below:
+neither an external perl pass nor a z80asm change nor a regression.
+
+`ravn/llvm-z80` `Z80MCAsmInfo` (the ELF/GNU textual path clang `--target=z80 -S`
+uses) now leaves **`Data64bitsDirective = nullptr`**. With that field null,
+`MCAsmStreamer::emitValueImpl` already splits every 8-byte value into two
+little-endian 4-byte `.long` emissions — so clang emits, e.g.,
+`0x4008000000000000` as `.long 0` / `.long 1074266112` and **no `.quad` ever
+reaches the bridge**. copt's existing correct `.long -> DEFQ` (4-byte) rule then
+lowers each half faithfully.
+
+Why it is safe on this target: a *symbolic/relocatable* 8-byte value would hit
+`emitValueImpl`'s `report_fatal_error` non-absolute path, but one cannot be
+formed here — casting a 16-bit address to a 64-bit initializer is rejected by
+the front-end as non-constant, and all `.quad` values clang emits are absolute
+integer constants. The change affects only textual `-S` output; the
+integrated-assembler ELF object path never consults this field.
+
+Consequences (done):
+- `lib/llvmz80/splitquad.pl` **deleted**; removed from `bridge_postproc.sh`.
+- `ravn/llvm-z80` lit test `llvm/test/CodeGen/Z80/quad-init-split-27.ll` pins the
+  two-`.long` emission (`.quad` forbidden via `CHECK-NOT`).
+- End-to-end `test/clang/runtime_quadinit.{c,sh}` passes under ntvcm with the
+  external pass gone (backend split alone; red/green verified).
+- No regression: 64-bit global initializers stay correct. Requires a clang built
+  with this MCAsmInfo change (they are developed and shipped together in this
+  fork).
+
+The maintainer-facing analysis below is retained for the record.
 
 ---
 
-**From Copilot (AI):**
+## (historical) The problem (verified)
 
-## The problem (verified)
 
 Under `zcc +cpm -compiler=llvmz80`, `clang --target=z80 -S` emits a 64-bit
 global initializer as a GNU 8-byte `.quad <value>`. z88dk's assembler has **no

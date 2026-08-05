@@ -10,14 +10,18 @@
 #      .rodata -> SECTION *; .globl -> GLOBAL; .asciz/.short/.byte/.zero ->
 #      DEFM/DEFW/DEFB/DEFS; strips .file/.ident/.type/.size/.addrsig.
 #      NB: 64-bit `.quad` is NOT handled by copt -- z88dk's DEFQ is only 4 bytes,
-#      so a text-substitution rule cannot split the value (ravn/z88dk#27).  The
-#      splitquad.pl pre-pass (stage 0) rewrites `.quad` into two `.long` halves
-#      first, which copt's correct `.long -> DEFQ` (4-byte) rule then lowers.
-#      Similarly, a large `.ascii "..."` (any const byte array >= ~100 bytes,
-#      escaped) overflows copt's own 512-char line buffer (copt.c MAXLINE) so
-#      its `.ascii -> DEFM` rule silently fails to match; splitascii.pl
-#      (stage 0, alongside splitquad.pl) breaks any long `.ascii` line into
-#      several short ones on real byte boundaries before copt ever sees it.
+#      so a text-substitution rule cannot split the value (ravn/z88dk#27).  This
+#      is now solved IN THE BACKEND: ravn/llvm-z80's Z80MCAsmInfo leaves
+#      Data64bitsDirective null, so MCAsmStreamer already emits each 64-bit
+#      initializer as two little-endian `.long` halves (no `.quad` ever reaches
+#      this bridge), which copt's correct `.long -> DEFQ` (4-byte) rule lowers.
+#      The old external splitquad.pl pre-pass is therefore gone (requires a clang
+#      built with that MCAsmInfo change; see ravn/llvm-z80 quad-init-split-27.ll).
+#      A large `.ascii "..."` (any const byte array >= ~100 bytes, escaped) still
+#      overflows copt's own 512-char line buffer (copt.c MAXLINE) so its
+#      `.ascii -> DEFM` rule silently fails to match; splitascii.pl (stage 0)
+#      breaks any long `.ascii` line into several short ones on real byte
+#      boundaries before copt ever sees it.
 #   2. fixlabels.pl         -- copt tokenises on whitespace, so it cannot
 #      rewrite labels containing dots (`.LBB0_4`, `L_.str.1`); perl does the
 #      dot->underscore / leading-dot-strip rewrite copt cannot express.
@@ -35,7 +39,7 @@ set -eu
 COPT=$1; CPUARG=$2; RULES=$3
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
-perl "$HERE/splitquad.pl" | perl "$HERE/splitascii.pl" | "$COPT" "$CPUARG" "$RULES" | perl "$HERE/fixlabels.pl" | awk '
+perl "$HERE/splitascii.pl" | "$COPT" "$CPUARG" "$RULES" | perl "$HERE/fixlabels.pl" | awk '
   /^[ \t]*\.local[ \t]/ { next }
   /^[ \t]*\.comm[ \t]/ {
     split($2,c,","); cn[++nc]=c[1]; cs[nc]=c[2]; def[c[1]]=1; next
