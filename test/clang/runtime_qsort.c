@@ -34,12 +34,21 @@
 
 #define N 200
 
-/* __smallc == sdcccall(0) for clang; empty for sccz80/sdcc (source-portable). */
-__smallc int cmp_asc(const void *a, const void *b) {
+/* The qsort comparator reaches the user function through a fixed sdcccall(0)
+ * thunk (l_cmp_sdcc), so for clang it must pin sdcccall(0) explicitly.  NOTE:
+ * this is NOT __smallc: since ravn/llvm-z80#279, clang's __smallc means
+ * z80_smallc (left-to-right) which is MIRRORED from sdcccall(0) for a 2-arg
+ * call and would invert the comparison.  Empty for sccz80/sdcc (portable). */
+#if defined(__LLVMZ80)
+#define __cmp_cc __attribute__((sdcccall(0)))
+#else
+#define __cmp_cc
+#endif
+__cmp_cc int cmp_asc(const void *a, const void *b) {
     return *(const int *)a - *(const int *)b;
 }
 
-__smallc int cmp_desc(const void *a, const void *b) {
+__cmp_cc int cmp_desc(const void *a, const void *b) {
     return *(const int *)b - *(const int *)a;
 }
 

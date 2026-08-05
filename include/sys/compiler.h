@@ -83,22 +83,28 @@
 // Backend mechanism pinned by llvm/test/CodeGen/Z80/z88dk-callee.ll; frontend
 // mapping by clang/test/CodeGen/z80-callee.c.  End-to-end validation against a
 // real clib link is Phase C.
-#define __smallc __attribute__((sdcccall(0)))
+// __smallc maps to the z80_smallc attribute: arguments pushed LEFT-TO-RIGHT
+// (last arg nearest the return address), CALLER cleans the stack -- byte-for-byte
+// the SDCC/sccz80 __smallc layout (CallingConv::Z80_SmallC, ravn/llvm-z80#279).
+// This is what the classic clib workers are compiled with, so a multi-arg
+// __smallc declaration now calls them correctly with no reversed-param header
+// bridge (fixes the register-vs-stack ABI class ravn/z88dk#22/#41).  Earlier this
+// was wired to sdcccall(0) (right-to-left), which happened to work only for the
+// 1-argument console workers where the two orders coincide.
+#define __smallc __attribute__((z80_smallc))
 #define __z88dk_callee __attribute__((z80_callee))
 #define __z88dk_fastcall __attribute__((z80_fastcall))
 
 // ravn/z88dk#31: the variadic stdio family (printf/sprintf/scanf/...) returns
-// its count in HL (the classic clib convention).  llvmz80's default sdcccall(1)
-// reads a 16-bit return from DE, so an unannotated variadic decl reads garbage
-// (the count is wrong; formatting/parsing are fine because varargs are stacked
-// either way).  Declaring the family __smallc == sdcccall(0) makes clang read
-// the return from HL, matching the worker.  The sccz80 branch already sets
-// `__vasmallc __smallc`; it was simply missing for llvmz80 when __smallc was
-// wired to sdcccall(0).  Guarded to __LLVMZ80: ez80-clang (__stdc, HL return)
-// is already correct and must not be touched (it may not support sdcccall).
+// its count in HL (the classic clib convention) and its varargs are pushed
+// RIGHT-TO-LEFT so the fixed format arg is reachable.  That is exactly
+// sdcccall(0), NOT __smallc -- now that __smallc means z80_smallc (left-to-right)
+// the two are no longer interchangeable, so __vasmallc must pin sdcccall(0)
+// explicitly.  Guarded to __LLVMZ80: ez80-clang (__stdc, HL return) is already
+// correct and must not be touched (it may not support sdcccall).
 #if defined(__LLVMZ80)
 #undef  __vasmallc
-#define __vasmallc __smallc
+#define __vasmallc __attribute__((sdcccall(0)))
 #endif
 #endif
 

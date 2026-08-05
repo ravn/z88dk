@@ -217,25 +217,18 @@ extern   int optreset;
 // _-prefixed ones; each entry embeds its own comparator thunk, so a single
 // classic library serves both compilers (see classic/stdlib/{qsort,bsearch}.asm).
 #if defined(__LLVMZ80)
-// ravn/llvm-z80: clang's __smallc == sdcccall(0) pushes arguments right-to-left,
-// but the shared _qsort/_bsearch library entries expect the z88dk __smallc
-// left-to-right push order (base/key deepest, compar on top -- see
-// classic/stdlib/{qsort,_qsort,bsearch,_bsearch}.asm).  Bind a reversed-argument
-// alias directly to the existing library symbol (via an __asm() label, so no
-// separate bridge module is needed) and swap the order back with a macro so the
-// pushed stack layout matches what the asm entry reads.  The comparator MUST be
-// __smallc: the l_cmp_sdcc thunk marshals its two operands on the stack, not in
-// registers, so a default (sdcccall(1)) comparator would be miscalled.
-extern void  __qsort_llvmz80(int (*compar)(const void *, const void *) __smallc,
-                             unsigned int size, unsigned int nmemb, void *base)
-    __smallc __asm("qsort");
-#define qsort(base, nmemb, size, compar) \
-    __qsort_llvmz80((compar), (size), (nmemb), (base))
-extern void *__bsearch_llvmz80(int (*compar)(const void *, const void *) __smallc,
-                               unsigned int size, unsigned int nmemb, void *base, void *key)
-    __smallc __asm("bsearch");
-#define bsearch(key, base, nmemb, size, compar) \
-    __bsearch_llvmz80((compar), (size), (nmemb), (base), (key))
+// ravn/llvm-z80: clang's __smallc now maps to z80_smallc (left-to-right push),
+// exactly the order the shared _qsort/_bsearch library entries expect (base/key
+// deepest, compar on top -- see classic/stdlib/{qsort,_qsort,bsearch,_bsearch}
+// .asm), so the NATURAL argument order below is correct -- no reversed-argument
+// alias needed (the pre-z80_smallc code reversed them against sdcccall(0)).  The
+// comparator is a FIXED sdcccall(0) contract: the shared l_cmp thunk marshals
+// its two operands in sdcccall(0) order, so the callback must pin sdcccall(0)
+// explicitly -- NOT __smallc, which now means z80_smallc (left-to-right) and, for
+// a 2-arg call, is MIRRORED from sdcccall(0), inverting the comparison.  A
+// default (sdcccall(1)) comparator would be miscalled too.  See ravn/llvm-z80#279.
+extern void __LIB__   qsort(void *base, unsigned int nmemb, unsigned int size, int (*compar)(const void *, const void *) __attribute__((sdcccall(0)))) __smallc;
+extern void __LIB__  *bsearch(void *key, void *base, unsigned int nmemb, unsigned int size, int (*compar)(const void *, const void *) __attribute__((sdcccall(0)))) __smallc;
 #else
 extern void __LIB__   qsort(void *base, unsigned int nmemb, unsigned int size, int (*compar)(const void *, const void *)) __smallc;
 extern void __LIB__  *bsearch(void *key, void *base, unsigned int nmemb, unsigned int size, int (*compar)(const void *, const void *)) __smallc;

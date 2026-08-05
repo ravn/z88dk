@@ -24,8 +24,16 @@
 
 #define N 16
 
-/* __smallc == sdcccall(0) for clang; empty for sccz80/sdcc (source-portable). */
-__smallc int cmp(const void *a, const void *b) {
+/* Comparator reaches the user function via the fixed sdcccall(0) l_cmp_sdcc
+ * thunk, so for clang it must pin sdcccall(0) -- NOT __smallc, which since
+ * ravn/llvm-z80#279 means z80_smallc (left-to-right, mirrored for 2 args and
+ * would invert the compare).  Empty for sccz80/sdcc (portable). */
+#if defined(__LLVMZ80)
+#define __cmp_cc __attribute__((sdcccall(0)))
+#else
+#define __cmp_cc
+#endif
+__cmp_cc int cmp(const void *a, const void *b) {
     return *(const int *)a - *(const int *)b;
 }
 
