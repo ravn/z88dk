@@ -175,9 +175,12 @@ extern void __LIB__  exit_fastcall(int status) __z88dk_fastcall;
 extern int  __LIB__  atexit_fastcall(void (*func)(void)) __z88dk_fastcall;
 #define exit(x) exit_fastcall(x)
 #define atexit(x) atexit_fastcall(x)
-#elif defined(__clang__)
-/* clang: __z88dk_fastcall maps to z80_fastcall (single arg in HL).
-   exit_fastcall expects HL=status; atexit_fastcall expects HL=func ptr. */
+#elif defined(__LLVMZ80)
+/* llvmz80/clang: __z88dk_fastcall maps to z80_fastcall (single arg in HL).
+   exit_fastcall expects HL=status; atexit_fastcall expects HL=func ptr.
+   Guarded to __LLVMZ80 (not __clang__) so ez80-clang, which shares __clang__
+   but may not support these z80 attributes, is left untouched -- see the same
+   rule in sys/compiler.h. */
 extern void __LIB__  exit_fastcall(int status) __z88dk_fastcall;
 extern int  __LIB__  atexit_fastcall(void (*func)(void)) __z88dk_fastcall;
 #define exit(x) exit_fastcall(x)
@@ -216,23 +219,14 @@ extern   int optreset;
 // One shared search/sort core.  sccz80 links the bare names (__LIB__), sdcc the
 // _-prefixed ones; each entry embeds its own comparator thunk, so a single
 // classic library serves both compilers (see classic/stdlib/{qsort,bsearch}.asm).
-#if defined(__LLVMZ80)
-// ravn/llvm-z80: clang's __smallc now maps to z80_smallc (left-to-right push),
-// exactly the order the shared _qsort/_bsearch library entries expect (base/key
-// deepest, compar on top -- see classic/stdlib/{qsort,_qsort,bsearch,_bsearch}
-// .asm), so the NATURAL argument order below is correct -- no reversed-argument
-// alias needed (the pre-z80_smallc code reversed them against sdcccall(0)).  The
-// comparator is a FIXED sdcccall(0) contract: the shared l_cmp thunk marshals
-// its two operands in sdcccall(0) order, so the callback must pin sdcccall(0)
-// explicitly -- NOT __smallc, which now means z80_smallc (left-to-right) and, for
-// a 2-arg call, is MIRRORED from sdcccall(0), inverting the comparison.  A
-// default (sdcccall(1)) comparator would be miscalled too.  See ravn/llvm-z80#279.
-extern void __LIB__   qsort(void *base, unsigned int nmemb, unsigned int size, int (*compar)(const void *, const void *) __attribute__((sdcccall(0)))) __smallc;
-extern void __LIB__  *bsearch(void *key, void *base, unsigned int nmemb, unsigned int size, int (*compar)(const void *, const void *) __attribute__((sdcccall(0)))) __smallc;
-#else
-extern void __LIB__   qsort(void *base, unsigned int nmemb, unsigned int size, int (*compar)(const void *, const void *)) __smallc;
-extern void __LIB__  *bsearch(void *key, void *base, unsigned int nmemb, unsigned int size, int (*compar)(const void *, const void *)) __smallc;
-#endif
+//
+// qsort/bsearch's OWN arguments are natural-order __smallc for every compiler.
+// The comparator CALLBACK is invoked by the library's sort/search thunk with the
+// classic-lib callback convention -- carried by __z88dk_callback (defined and
+// documented in <sys/compiler.h>): empty for sccz80/sdcc, sdcccall(0) for
+// llvmz80.  So the declarations, and any user comparator, need no #ifdef here.
+extern void __LIB__   qsort(void *base, unsigned int nmemb, unsigned int size, int (*compar)(const void *, const void *) __z88dk_callback) __smallc;
+extern void __LIB__  *bsearch(void *key, void *base, unsigned int nmemb, unsigned int size, int (*compar)(const void *, const void *) __z88dk_callback) __smallc;
 
 // l_qsort()/l_bsearch() operate on arrays of 2-byte items (pointers/ints),
 // sharing the one core rather than a separate little implementation.

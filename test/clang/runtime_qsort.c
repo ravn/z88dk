@@ -34,21 +34,15 @@
 
 #define N 200
 
-/* The qsort comparator reaches the user function through a fixed sdcccall(0)
- * thunk (l_cmp_sdcc), so for clang it must pin sdcccall(0) explicitly.  NOTE:
- * this is NOT __smallc: since ravn/llvm-z80#279, clang's __smallc means
- * z80_smallc (left-to-right) which is MIRRORED from sdcccall(0) for a 2-arg
- * call and would invert the comparison.  Empty for sccz80/sdcc (portable). */
-#if defined(__LLVMZ80)
-#define __cmp_cc __attribute__((sdcccall(0)))
-#else
-#define __cmp_cc
-#endif
-__cmp_cc int cmp_asc(const void *a, const void *b) {
+/* A qsort/bsearch comparator carries __z88dk_callback (from <stdlib.h>): the library
+ * sort thunk invokes it with SDCC's default (sdcccall0) order, so it expands to
+ * __attribute__((sdcccall(0))) under llvmz80 and to nothing for sccz80/sdcc.
+ * Portable across all three compilers with no #ifdef here.  See ravn/llvm-z80#279. */
+__z88dk_callback int cmp_asc(const void *a, const void *b) {
     return *(const int *)a - *(const int *)b;
 }
 
-__cmp_cc int cmp_desc(const void *a, const void *b) {
+__z88dk_callback int cmp_desc(const void *a, const void *b) {
     return *(const int *)b - *(const int *)a;
 }
 
