@@ -33,62 +33,22 @@
 
 typedef int mode_t;
 
-#if defined(__LLVMZ80) && !defined(__CPM)
-/* clang/llvmz80: the target/test fcntl workers (open/read/write) are plain
- * stack-based smallc routines that read their three 16-bit args left-to-right
- * from the stack -- name at [sp+6] (deepest), flags at [sp+4], mode at [sp+2]
- * -- exactly the frame sccz80's __smallc produces. All three asm labels
- * (open/_open/___open) alias this ONE worker; there is no real register
- * bridge. __ZPROTO3's clang branch declares the reversed-arg ___open entry
- * with the DEFAULT convention (sdcccall(1): HL=1st, DE=2nd, stack=3rd), which
- * the stack worker does not honour -> garbage (open->245/fd=-1). Plain
- * __smallc on open() would push right-to-left, landing name at [sp+2] instead
- * of [sp+6] -> still wrong (fd=-1). The fix mirrors __ZPROTO3's own idiom
- * (reversed-arg entry + inline forwarder) but pins the entry to __smallc:
- * sdcccall(0) pushes the reversed params (mode,flags,name) right-to-left, so
- * name lands deepest at [sp+6] and the unmodified worker reads it correctly.
- * No asm change needed.
- *
- * IMPORTANT: gated `&& !defined(__CPM)`. This reversed-arg __smallc idiom is
- * correct ONLY for the +test host-SYSCALL stack workers
- * (libsrc/target/test/fcntl/*.asm). Under +cpm (__CPM defined) the fcntl
- * workers are the classic-clib sccz80-ABI routines
- * (libsrc/target/cpm/fcntl/*.c); applying this rewrite there regressed +cpm
- * open() (returned fd<0, io_tests.c:88). The residual +cpm write/read
- * return-count ABI gap is tracked in ravn/z88dk#23 (umbrella #26), not here. */
-extern int __LIB__ __open(mode_t mode, int flags, const char *name) __smallc;
-__attribute__((always_inline)) __attribute__((overloadable))
-__attribute__((enable_if(1, "")))
-static inline int open(const char *name, int flags, mode_t mode) {
-    return __open(mode, flags, name);
-}
-#else
+/* clang/llvmz80: __smallc now maps to z80_smallc (left-to-right push), so the
+ * natural-order __ZPROTO3 declaration lands name at [sp+6] (deepest), flags at
+ * [sp+4], mode at [sp+2] -- exactly the frame sccz80's __smallc produces and the
+ * plain stack workers read.  The earlier reversed-arg + `!__CPM` idiom (needed
+ * only because __smallc was sdcccall(0)) is obsolete for both the +test and the
+ * +cpm workers.  See ravn/z88dk#22/#41, ravn/llvm-z80#279. */
 __ZPROTO3(int,,open,const char *,name, int, flags, mode_t, mode)
-#endif
 __ZPROTO2(int,,creat,const char *,name,mode_t, mode)
 
 extern int __LIB__ close(int fd);
 
-#if defined(__LLVMZ80) && !defined(__CPM)
-/* Same rationale as open() above: reversed-arg __smallc entry so the
- * unmodified stack workers see name/fd at [sp+6]. Gated `&& !defined(__CPM)`
- * so the +cpm classic-clib workers keep their default ABI (see open()). */
-extern ssize_t __LIB__ __read(size_t len, void *ptr, int fd) __smallc;
-__attribute__((always_inline)) __attribute__((overloadable))
-__attribute__((enable_if(1, "")))
-static inline ssize_t read(int fd, void *ptr, size_t len) {
-    return __read(len, ptr, fd);
-}
-extern ssize_t __LIB__ __write(size_t len, void *ptr, int fd) __smallc;
-__attribute__((always_inline)) __attribute__((overloadable))
-__attribute__((enable_if(1, "")))
-static inline ssize_t write(int fd, void *ptr, size_t len) {
-    return __write(len, ptr, fd);
-}
-#else
+/* Same as open() above: natural-order __ZPROTO3 under z80_smallc lands the args
+ * left-to-right (fd deepest) for the plain stack workers -- no reversed-arg
+ * idiom needed. */
 __ZPROTO3(ssize_t,,read,int,fd,void *,ptr,size_t,len)
 __ZPROTO3(ssize_t,,write,int,fd,void *,ptr,size_t,len)
-#endif
 
 #ifndef __STDC_ABI_ONLY
 extern long __LIB__ __SAVEFRAME__ lseek(int fd,long posn, int whence) __smallc;
