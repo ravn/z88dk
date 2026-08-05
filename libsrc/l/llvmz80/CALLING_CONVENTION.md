@@ -206,9 +206,14 @@ auto-link is unconditional (guarded only by the var being set + an actual link).
 
 Status: `(double)int` (`__floatsidf`, was ravn/llvm-z80#273) and user
 `va_start`/`va_arg` (was ravn/llvm-z80#270) are **FIXED**; `printf("%f")` works on
-both classic (nanoprintf closure) and newlib (`-D__LLVMZ80_IEEE_PRINTF`,
-ravn/z88dk#35). See the "Known Bugs" list in the workspace `CLAUDE.md` for the
-current state.
+both classic and newlib (`-D__LLVMZ80_IEEE_PRINTF`, ravn/z88dk#35). See the
+"Known Bugs" list in the workspace `CLAUDE.md` for the current state.
+
+> **Classic `%f` has two routes** — the `llvmz80-softfloat` nanoprintf closure,
+> AND stock z88dk `printf` via `#pragma printf` + `--math32` (verified
+> 2026-08-05). Stock `printf("%f")` silently prints a literal `f` without the
+> pragma because llvmz80/zsdcc do not auto-scan format strings the way sccz80
+> does. Full recipe + rationale: [`PRINTF_FLOAT.md`](PRINTF_FLOAT.md).
 
 # Variadic stdio return value (printf/sprintf/scanf family) — ravn/z88dk#31 (FIXED)
 
