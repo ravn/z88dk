@@ -64,6 +64,10 @@ register except IX. Audited (2026-07-23): no public newlib entry leaks IX
 
 ## What NOT to rely on (deliberately not filled)
 
+> Full list with symptoms + root cause + policy: **`KNOWN_GAPS.md`** (this
+> directory). newlib is compat-only (classic is the forward direction), so newlib
+> gaps for llvmz80 are **documented, not fixed** — see that file for the rationale.
+
 - **Disk `FILE*` I/O** does not link on newlib (`asm_target_open` unimplemented
   tree-wide — ravn/z88dk #34, upstream z88dk/z88dk#3022): unsupported for now,
   use the classic clib for CP/M file I/O.
