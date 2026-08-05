@@ -417,8 +417,27 @@
 #ifdef __Z88DK
    #include <intrinsic.h>
    #ifdef PRINTF
-      #pragma output CLIB_OPT_PRINTF = 0x04000601
-      #pragma output CLIB_OPT_SCANF  = 0x01
+      /* Select only the printf/scanf converters actually used, per the z88dk
+       * wiki "Classic -- Pragmas" (Configuring printf and scanf converters):
+       * https://github.com/z88dk/z88dk/wiki/Classic--Pragmas
+       * sccz80 auto-scans the format strings, but zsdcc and the llvmz80 (clang)
+       * lane do NOT -- they fall back to the default table (no float), so %f
+       * silently prints a literal 'f'.  The explicit string pragma forces the
+       * set for every compiler.  The width form "%6.1f" (not bare "%f") is
+       * required so the classic library links its formatted-float path.
+       *
+       * The %f converter is gated on TIMEFUNC because the only %f printfs live
+       * under #ifdef TIMEFUNC (dhry_1.c).  A plain -DPRINTF build therefore no
+       * longer drags in the float converter -- which otherwise makes it fail to
+       * link on a no-float-lib compiler even though %f is never called.  When
+       * TIMEFUNC is set, build with --math32 so the 32-bit IEEE __dtoa core is
+       * available (it matches clang's IEEE-754 double). */
+      #ifdef TIMEFUNC
+         #pragma printf = "%6.1f %c %d %s"
+      #else
+         #pragma printf = "%c %d %s"
+      #endif
+      #pragma scanf  = "%d"
    #endif
 #endif
 
