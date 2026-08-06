@@ -28,6 +28,19 @@ trap 'rm -rf "$WORK"' EXIT
 printf 'abcdefghij' > "$WORK/FIX.TXT"
 
 if ! zcc +test -vn -compiler=llvmz80 -o "$WORK/rt.bin" "$SRC" >"$WORK/build.log" 2>&1; then
+    # The +test target's clib (test_clib.lib) is an on-demand-built artifact that
+    # a +cpm-only z88dk tree need not have.  A missing test_clib.lib is an
+    # ENVIRONMENT gap, not a code failure -- SKIP (like the zcc/ticks guards
+    # above) so a +cpm-only checkout runs the suite clean.  This test needs
+    # +test on purpose: it asserts BYTE-EXACT fd-layer semantics (read of a
+    # 10-byte file returns exactly 10, byte-exact write) that only the +test
+    # host-file SYSCALL workers provide; CP/M's record-oriented BDOS cannot, so
+    # the +cpm fd-layer is covered instead by issue23_fcntl_write (open/write)
+    # and the byte-accurate FILE* layer by runtime_file*/runtime_fileio_*.
+    if grep -q 'test_clib\.lib' "$WORK/build.log"; then
+        echo "SKIP: +test target not built (test_clib.lib absent); +cpm fd-layer covered by issue23_fcntl_write"
+        exit 0
+    fi
     echo "--- build log ---"; cat "$WORK/build.log"
     echo "FAIL: build failed"; exit 1
 fi
