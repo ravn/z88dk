@@ -34,3 +34,33 @@ stdcbench_clock_t stdcbench_clock(void)
 	static stdcbench_clock_t ticks;
 	return (++ticks);
 }
+
+/* Issue #40 regression guard -- see the block comment in portme.h.  Reproduces
+ * the exact corrupting shape (qsort of an all-equal array with element size 1,
+ * as c90lib-lnlc's calc_neighbour_degrees does) between two mallocs; if the
+ * heap free-list header got clobbered, the second malloc returns NULL. */
+#if defined(__LLVMZ80)
+#include <stdlib.h>
+
+static int stdcbench_sc_cmp(const void *a, const void *b) __z88dk_callback
+{
+	return (*(const unsigned char *)a) - (*(const unsigned char *)b);
+}
+
+void stdcbench_heap_selfcheck(void)
+{
+	unsigned char eq[6] = {12, 12, 12, 12, 12, 12};   /* all-equal, size 1 */
+	void *p = malloc(64);
+	qsort(eq, 6, 1, stdcbench_sc_cmp);                /* writes size_lsb */
+	void *q = malloc(64);
+	if (p == 0 || q == 0) {
+		printf("HEAP SELFCHECK FAILED"
+		       " (issue #40: bss_stdlib overlaps dynamic heap)\n");
+		exit(1);
+	}
+	free(q);
+	free(p);
+}
+#else
+void stdcbench_heap_selfcheck(void) { }
+#endif

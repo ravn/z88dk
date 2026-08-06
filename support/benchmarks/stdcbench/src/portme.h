@@ -22,27 +22,28 @@ typedef unsigned long stdcbench_clock_t;
 /* Heap setup for the c90lib (standard-library) module, which uses
  * malloc/calloc/realloc/free (c90lib-lnlc allocates up to ~1.2 KB per graph;
  * c90lib-peep/htab grows a hash table via realloc).  Under ravn/llvm-z80 +cpm
- * the classic clib needs an explicit heap: without one, malloc returns NULL,
- * the kernels take their "malloc() failed" error path repeatedly and the run
- * neither validates nor finishes in a sane ticks budget.
+ * the classic clib needs a heap: without one, malloc returns NULL, the kernels
+ * take their "malloc() failed" error path repeatedly and the run neither
+ * validates nor finishes in a sane ticks budget.
  *
- * The natural choice would be the WHOLE free TPA -- everything from the end of
- * BSS up to SP (the bottom of BDOS) -- via the crt's dynamic heap models
- * (CRT_STACK_SIZE, or -DAMALLOC in crt_init_heap.inc).  That is BLOCKED for now
- * by a classic-malloc/llvmz80 heap-init bug: every dynamic (BSS_END..SP) model
- * fails the full run (CRT_STACK_SIZE registers a bogus ~200 KB arena starting
- * mid-program -> address wraparound -> warm-boot loop; -DAMALLOC registers a
- * seemingly-sane ~29 KB arena yet still takes the malloc()-failed path), while
- * a FIXED BSS heap of the SAME size works.  Tracked in ravn/z88dk#40.
+ * We use the WHOLE free TPA -- everything from the end of BSS up to just below
+ * SP (the bottom of BDOS) -- via the crt's dynamic CRT_STACK_SIZE model.  At
+ * runtime +cpm sets SP from word@6 (the BDOS base) and the crt registers the
+ * heap as [__BSS_END_tail .. SP - CRT_STACK_SIZE]; the stack grows downward
+ * from SP into the reserved CRT_STACK_SIZE region.  Layout:
+ *   [program][BSS][heap -> ... gap ... <- stack][BDOS]
+ * Nothing is hardcoded -- it adapts to whatever machine's BDOS ceiling.
  *
- * Until that is fixed, use a fixed BSS heap (CLIB_MALLOC_HEAP_SIZE).  24 KB
- * covers the benchmark's peak live set with margin: fixed heaps of 16/20/24/28
- * KB all PASS (score 480); 32 KB makes the image large enough that the
- * downward stack collides with the heap and the run hangs, so 24 KB leaves
- * headroom on both sides.  Other compilers manage their own heap, so this is
- * llvmz80-only. */
+ * The reserve is 2 KB: the benchmark's measured peak stack use is ~780 B, so
+ * 2048 gives ~2.5x margin while leaving 20+ KB of heap under a typical BDOS.
+ *
+ * (This dynamic model was previously BLOCKED by ravn/z88dk#40 -- a classic-CRT
+ * section-ordering bug where qsort's __stdlib_quicksort_size_lsb overlapped the
+ * dynamic heap's free-list header, corrupting it on the first qsort.  Fixed by
+ * adding `SECTION bss_stdlib` to lib/crt/classic/crt_section_bss.inc.  Other
+ * compilers manage their own heap, so this is llvmz80-only.) */
 #if defined(__LLVMZ80)
-#pragma define CLIB_MALLOC_HEAP_SIZE=24576
+#pragma define CRT_STACK_SIZE=2048
 #endif
 
 /* Module selection.
@@ -69,13 +70,23 @@ typedef unsigned long stdcbench_clock_t;
 #endif
 
 /* qsort()/bsearch() comparator calling convention.  Under ravn/llvm-z80 the
- * z88dk qsort core calls the comparator with the __smallc (sdcccall(0), stack)
- * convention -- see include/stdlib.h -- so a comparator passed to qsort MUST
- * be declared __smallc or it is miscalled at runtime.  Every other compiler
- * uses its default convention, so the qualifier is empty there.  Applied to
- * the c90lib-lnlc.c comparator; harmless (expands empty) elsewhere. */
+ * z88dk qsort/bsearch core invokes the comparator with the classic-lib callback
+ * convention, which <stdlib.h> carries as __z88dk_callback (= sdcccall(0) for
+ * llvmz80, empty for sccz80/sdcc -- see <sys/compiler.h>).  A comparator passed
+ * to qsort MUST be declared with this qualifier or it is miscalled at runtime.
+ * Applied to the c90lib-lnlc.c comparator; harmless (expands empty) elsewhere. */
 #if defined(__LLVMZ80)
-#define STDCBENCH_CMP_CONV __smallc
+#define STDCBENCH_CMP_CONV __z88dk_callback
 #else
 #define STDCBENCH_CMP_CONV
 #endif
+
+/* Issue #40 regression guard (llvmz80 dynamic-heap model).  qsort writes its
+ * element-size lowest-set-bit to the BSS scratch var __stdlib_quicksort_size_lsb;
+ * if the classic CRT ever drops `SECTION bss_stdlib` from crt_section_bss.inc
+ * again, that var overlaps the dynamic heap's free-list header at __BSS_END_tail
+ * and the FIRST qsort corrupts it -> the next malloc returns NULL.  This runs a
+ * tiny malloc/qsort(all-equal,size=1)/malloc at startup and aborts loudly if the
+ * overlap has regressed, instead of failing deep inside a kernel with a bare
+ * "malloc() failed".  Cheap; a no-op on other compilers. */
+void stdcbench_heap_selfcheck(void);

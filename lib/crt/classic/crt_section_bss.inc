@@ -35,6 +35,7 @@ ENDIF
     SECTION bss_arch
     SECTION bss_clib
     SECTION bss_input
+    SECTION bss_stdlib
     SECTION bss_string
     SECTION bss_alloc_balloc
 IF !__crt_org_graphics

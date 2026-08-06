@@ -85,6 +85,7 @@ int main(void)
 #else
 	printf("\n%s\n", stdcbench_name_version_string);
 
+	stdcbench_heap_selfcheck();   /* issue #40 guard; no-op off llvmz80 */
 	score = stdcbench();
 
 #ifdef C90BASE
