@@ -13,6 +13,11 @@
  *   c90lib  iterations = STDCBENCH_CLOCKS_PER_SEC * 40
  * Keep it small so the emulated run finishes in a sane ticks budget while
  * still exercising each module enough times to be representative.
+ *
+ * Consequence: the reported "score" is a deterministic CONSTANT here
+ * (SECONDS*10 per module -> c90base 80, c90lib 400, final 480), NOT a speed
+ * or instruction figure -- it only certifies completion + self-validation.
+ * Full derivation and the real-timing (T-state) recipe: ../RESULTS.md.
  */
 
 typedef unsigned long stdcbench_clock_t;
