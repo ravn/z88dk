@@ -3531,7 +3531,7 @@ static void configure_compiler(void)
          * with --target=z80, so both the preprocess and compile steps use the
          * filter_out iostyle: it omits the z88dk bin-dir prefix (our clang is
          * an absolute/PATH binary, not a z88dk tool) and pipes via stdio. */
-        preprocarg = " -E -D__CLANG -D__LLVMZ80 --target=z80 -std=gnu11";
+        preprocarg = " -E -D__CLANG -D__LLVMZ80 --target=z80 -std=gnu23";
         BuildOptions(&cpparg, preprocarg);
 
         /* zcc feeds this step a .i file (preprocessed), which the clang
@@ -3554,11 +3554,37 @@ static void configure_compiler(void)
                 if (lvl > 3) lvl = 3;
                 snprintf(optflag, sizeof(optflag), "-O%d", lvl);
             }
+            /* C standard: default to gnu23 (C23 + GNU extensions).  Rationale:
+             * the RC702 production firmware drives clang directly with
+             * -std=c23 (e.g. cpnos-in-c), and clang's OWN default here is
+             * gnu17 (__STDC_VERSION__ 201710L); pinning gnu11 would silently
+             * DOWNGRADE the zcc path below both and reject C23 features the
+             * sources use (constexpr, nullptr, #embed, [[attributes]]).  Kept
+             * consistent with the preprocess step's -std above (both must
+             * match for #embed, a preprocessor feature).
+             *
+             * OVERRIDE per build: pass `-Cg-std=<std>` (e.g. -Cg-std=gnu17).
+             * -Cg options feed `clangarg`, appended AFTER this buf (see the
+             * add_option_to_compiler(clangarg) below), and clang honours the
+             * LAST -std on its command line -- so the caller's -Cg-std wins
+             * over this default without editing the config or rebuilding zcc. */
             snprintf(buf, sizeof(buf),
-                     "--target=z80 -S -ffreestanding -std=gnu11 -o - %s",
+                     "--target=z80 -S -ffreestanding -std=gnu23 -o - %s",
                      optflag);
         }
         add_option_to_compiler(buf);
+
+        /* Float/double are 32-bit binary32 on this target (float32-math32,
+         * ravn/llvm-z80#277).  Emit the f32 arithmetic libcalls
+         * (__addsf3/__subsf3/__mulsf3/__divsf3) with the sdcccall(0) ABI so
+         * they bridge cleanly to z88dk's math32 cores.  This is the z88dk
+         * (-compiler=llvmz80) path -- always the bridge path, never the
+         * standalone ELF/compiler-rt path -- so the flag is always correct
+         * here.  Without it the bridge links but reads operands from the wrong
+         * place and silently computes garbage (see
+         * libsrc/l/llvmz80/__addsf3.asm).  The math32 library itself is still
+         * selected at link time via --math32 (see ravn/z88dk#44). */
+        add_option_to_compiler("-mllvm -z80-float-sdcccall0");
 
         if (clangarg) {
             add_option_to_compiler(clangarg);
