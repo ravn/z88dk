@@ -131,3 +131,43 @@ architecture, and — decisively — that run used a real timer while ours uses 
 call-counter clock described above. Per stdcbench's own `RULES`, a comparable
 report requires the same version, the same modules, a real clock, and full
 hardware/clock disclosure.
+
+## Cross-compiler sweep (measured 2026-08-06)
+
+Actual `./compare.sh` output on this workspace (ntvcm self-check + `z88dk-ticks`
+T-states over the fixed workload; llvmz80 = ravn/llvm-z80 clang). Every lane runs
+the **same** module set on identical work, so the cycles isolate codegen.
+
+### c90base (fair — all three compilers build and run it)
+
+| Compiler   | opt  | .COM bytes | T-states       | self-check |
+|------------|------|-----------:|---------------:|------------|
+| llvmz80    | -O2  |      13513 |    414,888,705 | OK         |
+| sdcc       | -SO3 |      12292 |    809,940,171 | OK         |
+| sccz80     | -O2  |      11503 |  1,350,010,977 | OK         |
+
+Read: **all three compilers run stdcbench to completion with `STDCBENCH OK`.** On
+speed, llvmz80 is ~1.95× faster than sdcc and ~3.25× faster than sccz80 on this
+workload; on size it is the largest (`+10 %` vs sdcc, `+17 %` vs sccz80) — the
+classic speed/size trade-off. The score (480) is identical for all three by
+construction (see above), which is exactly why the real comparison is T-states,
+not the score.
+
+### c90base + c90lib (`MODULES=all`) — llvmz80 only in this harness
+
+| Compiler   | opt  | .COM bytes | T-states        | self-check |
+|------------|------|-----------:|----------------:|------------|
+| llvmz80    | -O2  |      30496 |  14,479,037,266 | OK         |
+| sdcc       | -SO3 |          - |               - | build-fail |
+| sccz80     | -O2  |          - |               - | build-fail |
+
+The c90lib module uses `malloc`/`free`/`realloc`. The whole-TPA dynamic-heap model
+here (`portme.h` `CRT_STACK_SIZE`, the ravn/z88dk#40 CRT fix) is wired for the
+llvmz80 lane; the classic sccz80/sdcc `malloc` links against an uninitialised
+`_heap` symbol (`error: undefined symbol: _heap`) and fails to link. So the
+c90lib lane is llvmz80-only until the classic-heap init is added for those lanes;
+c90base is the fully fair cross-compiler comparison.
+
+Reproduce: `NTVCM=/path/to/ntvcm ./compare.sh` (c90base) or `MODULES=all
+./compare.sh`. Requires `test_clib.lib` built + installed to `lib/clibs/z80/`
+(the `+test` T-state lane); build it with `make test_clib.lib` in `libsrc/`.
