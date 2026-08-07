@@ -106,7 +106,7 @@ extern char __LIB__  __SAVEFRAME__*ctime(const time_t *t);
 
 
 #ifndef FAKECLOCK
-extern clock_t __LIB__ clock(void);
+extern clock_t __LIB__ clock(void) __z88dk_fastcall;
 #endif
 
 extern int FRAMES;
