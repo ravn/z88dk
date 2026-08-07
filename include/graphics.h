@@ -176,8 +176,8 @@ extern void __LIB__ setpos_callee(int px, int py) __smallc __z88dk_callee;
 #endif
 
 /* Get current X position of graphics cursor */
-extern int __LIB__ getx(void);
-extern int __LIB__ gety(void);
+extern int __LIB__ getx(void) __z88dk_fastcall;
+extern int __LIB__ gety(void) __z88dk_fastcall;
 
 /* Draw a box (minimum size: 3x3) */
 __ZPROTO4(void,,drawb,int,tlx,int,tly,int,width,int,height)
@@ -313,8 +313,8 @@ extern int x_4x6;
 extern int y_4x6;
 
 /* Get MAX x and y coordinates */
-extern int __LIB__ getmaxx(void);
-extern int __LIB__ getmaxy(void);
+extern int __LIB__ getmaxx(void) __z88dk_fastcall;
+extern int __LIB__ getmaxy(void) __z88dk_fastcall;
 
 /* Set FATPIX mode.
  *
