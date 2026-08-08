@@ -243,3 +243,77 @@ they are declared **`__attribute__((sdcccall(0)))`** under `#if defined(__LLVMZ8
 in `include/stdio.h` (again *not* `__smallc`, which would push them the wrong
 way). Verified GREEN by the integration suite (`test/clang/runtime_fileio_fmt`,
 `runtime_printf_ret`, and the vfamily self-check).
+
+# 32-bit multiply `-O3` fast path — `__mulsi3` → `__mulsi3_fast` (ravn/llvm-z80 #283)
+
+At **`-O3` only** (clang `CodeGenOptLevel::Aggressive`), the Z80 backend routes
+the 32-bit integer multiply libcall `__mulsi3` to a fast variant
+`__mulsi3_fast`. Every other opt level (`-O0/-O1/-O2/-Os/-Oz`) keeps the plain
+`__mulsi3`, so production firmware (built at `-Os`) is untouched. SM83 (gbz80)
+is excluded (different multiply ABI/runtime, no `_fast` bridge) — matching the
+`-O3` `__*hi3_fast` div/mod routing (#244).
+
+## Why it is faster — the signed-magnitude demote trick
+
+Both bridges here forward to the z88dk classic 32-bit multiply cores. The
+unsigned core `l_mulu_32_32x32` (= `l_small_mul_32_32x32` on the small model)
+has a fast path that *demotes* a 32×32 multiply to a single 16×16 when **both**
+hi-words are zero. clang sign-extends `i16→i32` for the common `(long)a*b`
+fixed-point shape, so a negative operand has hi = `0xFFFF` and **misses** the
+demote → the full, slow 32×32 runs.
+
+`__mulsi3_fast` instead calls the **signed** core `l_muls_32_32x32`
+(= `l_small_muls_32_32x32`), which takes each operand's *magnitude* first
+(hi → `0x0000` for a value that fits 16 bits), **hits** the demote, then fixes
+the sign. The low 32 bits of a signed vs unsigned product are identical, so this
+is a **correct drop-in for every 32-bit multiply**, not just sext-`i16` ones. It
+only costs a small abs/negate overhead on *genuine* 32-bit operands (which then
+miss the demote anyway) — a speculative speed-over-predictability trade, which is
+exactly why it is gated to `-O3`.
+
+## The bridge file (this directory)
+
+`__mulsi3_fast.asm` is a byte-for-byte sibling of `__mulsi3.asm` (same clang↔core
+ABI adaptation: register factor in `HL:DE`, other factor on the stack, preserve
+`IX`, product back in `HL:DE`) with a single change:
+`call l_muls_32_32x32` instead of `call l_mulu_32_32x32`.
+
+## Compiler side — where the routing lives (non-obvious under the new RTLIB API)
+
+Under LLVM's RuntimeLibcalls redesign the GlobalISel legalizer resolves a
+`.libcallFor` name from a **`LibcallLoweringInfo`** built by the
+`LibcallLoweringInfoWrapper` analysis — which calls
+`TargetSubtargetInfo::initLibcallLoweringInfo`, **not** the `TargetLowering`
+instance. So the override must live in `Z80Subtarget::initLibcallLoweringInfo`
+(`setLibcallImpl(RTLIB::MUL_I32, RTLIB::impl___mulsi3_fast)` gated on opt level);
+a `setLibcallImpl` in the `Z80TargetLowering` ctor silently has **no effect**
+(the emitted call stays `___mulsi3`). The custom impl name is declared in
+`llvm/include/llvm/IR/RuntimeLibcalls.td` as
+`def __mulsi3_fast : RuntimeLibcallImpl<MUL_I32>;`. Pinned by lit test
+`llvm/test/CodeGen/Z80/issue-283-mul-fast-o3.ll` (O3 → `___mulsi3_fast`,
+O2 → `___mulsi3`).
+
+## Measured effect (full mandelbrot, RC702 in MAME, `-nothrottle`, `_main`→`_getk`)
+
+| Build | T-states | vs clang `-O2` |
+| --- | --- | --- |
+| clang `-O2` (`__mulsi3`) | 1,192,734,124 | — |
+| clang `-O3`, mul unchanged (isolation) | 1,192,734,175 | +0.0% |
+| **clang `-O3` (`__mulsi3_fast`)** | **691,592,091** | **−42.0%** |
+| sccz80 `-O2` | 934,494,391 | −21.7% |
+| sccz80 `-O3` | 941,766,172 | −21.0% |
+
+The isolation row (clang `-O3` linked against a `__mulsi3_fast` that calls the
+*unsigned* core) is essentially identical to `-O2`, proving the **entire** win is
+the multiply routing, not general `-O3`. With it, clang `-O3` beats sccz80 by
+~26% here (clang's BSS locals + better `>>` codegen dominate once the multiply
+gap closes). Render output is **byte-identical** between `-O2` and `-O3` (the
+signed/unsigned low-32-bit guarantee).
+
+## Packaging caveat
+
+`__mulsi3_fast.asm` lives in this directory but the symbol only resolves at link
+once the classic `crt0` libs are rebuilt (it is compiled into the `*_crt0.lib`
+like the other `l/llvmz80` objects). The #283 measurement above linked
+`__mulsi3_fast` as a standalone object; a lib rebuild is the packaging step for
+arbitrary `-O3` user builds to pick it up automatically.
