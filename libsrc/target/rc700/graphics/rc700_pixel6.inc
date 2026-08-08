@@ -30,7 +30,7 @@
         EXTERN  textpixl
         EXTERN  div3
         EXTERN  setgfx
-        EXTERN  RC700_DISPLAY
+        EXTERN  rc700_rowaddr
         EXTERN  __console_w
         EXTERN  __console_h
         EXTERN  __gfx_coords
@@ -65,27 +65,26 @@
         ld      c, a                    ; c = x/2  (cell col)
         push    bc                      ; save reduced (b=row, c=col)
 
-    ; ---- compute the VRAM cell address ONCE: RC700_DISPLAY + row*80 + col ----
-    ; VRAM is a contiguous 80x25 grid, so cell (row,col) lives at a fixed
-    ; offset row*80+col from the base -- no O(row) `xypos` djnz loop needed,
-    ; and we compute it once for both the read and the write (same cell).
-    ; row*80 = (row<<4)*5 = 16*row + 64*row, all constant-time shifts.
+    ; ---- compute the VRAM cell address ONCE via the row-base table + col ----
+    ; VRAM is a contiguous 80x25 grid, so cell (row,col) = rc700_rowaddr[row]
+    ; + col. rc700_rowaddr (in generic_console.asm) holds RC700_DISPLAY+row*80
+    ; for row 0..24, so this is a single word load -- no O(row) xypos djnz loop
+    ; and no runtime row*80 multiply. Computed once for both read and write.
         ld      l, b
-        ld      h, 0                    ; hl = row
-        add     hl, hl                  ; 2*row
-        add     hl, hl                  ; 4*row
-        add     hl, hl                  ; 8*row
-        add     hl, hl                  ; hl = 16*row
-        ld      d, h
-        ld      e, l                    ; de = 16*row
-        add     hl, hl                  ; 32*row
-        add     hl, hl                  ; 64*row
-        add     hl, de                  ; hl = 80*row
-        ld      d, 0
-        ld      e, c
-        add     hl, de                  ; + col  -> row*80 + col
-        ld      de, RC700_DISPLAY
-        add     hl, de                  ; hl = &VRAM[cell]
+        ld      h, 0
+        add     hl, hl                  ; 2*row = word index
+        ld      de, rc700_rowaddr
+        add     hl, de
+        ld      a, (hl)
+        inc     hl
+        ld      h, (hl)
+        ld      l, a                    ; hl = RC700_DISPLAY + row*80
+        ld      a, c                    ; col (0..79)
+        add     a, l
+        ld      l, a
+        jr      nc, nocarry
+        inc     h                       ; carry into high byte (col push)
+nocarry:
         ld      (rc700_pix_addr), hl    ; stash for the write-back
 
     ; ---- read the char currently in the cell (raw mode, hl already = addr) ----
