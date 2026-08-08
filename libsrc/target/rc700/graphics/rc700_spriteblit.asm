@@ -90,26 +90,27 @@ band_loop:
         or      a
         jp      z, blit_done            ; no rows left
 
-        ; load the 3 row bytes of this band (w<=8 -> 1 byte/row)
+        ; load the 3 row bytes of this band into B,C,D (register-resident:
+        ; the mask build shifts them in-register, no per-shift RAM round-trip).
         ld      hl, (sb_bmptr)
-        ld      a, (hl)
-        ld      (sb_r0), a
+        ld      b, (hl)                 ; row0
         inc     hl
-        ld      a, (hl)
-        ld      (sb_r1), a
+        ld      c, (hl)                 ; row1
         inc     hl
-        ld      a, (hl)
-        ld      (sb_r2), a
+        ld      d, (hl)                 ; row2
         inc     hl
         ld      (sb_bmptr), hl          ; advance past the 3 consumed rows
 
-        ; band cell base address = rc700_rowaddr[crow]
+        ; band cell base address = rc700_rowaddr[crow], computed with A+HL only
+        ; so B,C,D (the just-loaded row bytes) are preserved (no DE clobber).
         ld      a, (sb_crow)
+        add     a, a                    ; crow*2 = word index (crow<=24 -> <=48)
+        ld      hl, rc700_rowaddr
+        add     a, l
         ld      l, a
-        ld      h, 0
-        add     hl, hl                  ; word index
-        ld      de, rc700_rowaddr
-        add     hl, de
+        jr      nc, base_nc
+        inc     h
+base_nc:
         ld      a, (hl)
         inc     hl
         ld      h, (hl)
@@ -123,45 +124,34 @@ band_loop:
         ld      (sb_ccnt), a
 
 cell_loop:
-        ; ---- build the 6-bit cell mask from the 3 stored row bytes ----
-        ; consume 2 MSBs from each row (col0 then col1), left-to-right cells.
+        ; ---- build the 6-bit cell mask from the 3 row bytes in B,C,D ----
+        ; consume the 2 MSBs of each row (col0 then col1) directly in-register;
+        ; the shifted-out state stays in B/C/D for the next cell -- no RAM.
         ld      e, 0                    ; e = accumulating mask
-        ; row0 -> bit0 (col0), bit1 (col1)
-        ld      a, (sb_r0)
-        sla     a
-        ld      (sb_r0), a
+        ; row0 (B) -> bit0 (col0), bit1 (col1)
+        sla     b
         jr      nc, m_n0
         set     0, e
 m_n0:
-        ld      a, (sb_r0)
-        sla     a
-        ld      (sb_r0), a
+        sla     b
         jr      nc, m_n1
         set     1, e
 m_n1:
-        ; row1 -> bit2 (col0), bit3 (col1)
-        ld      a, (sb_r1)
-        sla     a
-        ld      (sb_r1), a
+        ; row1 (C) -> bit2 (col0), bit3 (col1)
+        sla     c
         jr      nc, m_n2
         set     2, e
 m_n2:
-        ld      a, (sb_r1)
-        sla     a
-        ld      (sb_r1), a
+        sla     c
         jr      nc, m_n3
         set     3, e
 m_n3:
-        ; row2 -> bit4 (col0), bit5 (col1)
-        ld      a, (sb_r2)
-        sla     a
-        ld      (sb_r2), a
+        ; row2 (D) -> bit4 (col0), bit5 (col1)
+        sla     d
         jr      nc, m_n4
         set     4, e
 m_n4:
-        ld      a, (sb_r2)
-        sla     a
-        ld      (sb_r2), a
+        sla     d
         jr      nc, m_n5
         set     5, e
 m_n5:
@@ -170,6 +160,7 @@ m_n5:
         jp      z, cell_next            ; no set sub-pixels -> nothing to write
 
         ; ---- RMW this cell: addr = base + ccol ----
+        ; uses only A and HL, so B,C,D (rows) and E (mask) survive.
         ld      hl, (sb_base)
         ld      a, (sb_ccol)
         add     a, l
@@ -181,17 +172,21 @@ addr_nc:
         ld      (sb_addr), hl
         ld      a, (hl)                 ; current glyph char
 
-        ; reverse-map char -> current 6-bit mask (same arithmetic as pixel6.inc)
-        ; $20..$3F -> 0..31 ; $60..$7F -> 32..63 ; else -> 0
-        ld      d, a
-        sub     $20
+        ; reverse-map char -> current 6-bit mask, A-ONLY (no temp reg, so D
+        ; stays free to hold row2). Same ranges as pixel6.inc:
+        ;   $20..$3F -> 0..31 ; $60..$7F -> 32..63 ; else -> 0
+        cp      $60
+        jr      c, rev_low              ; char < $60
+        cp      $80
+        jr      nc, rev_zero            ; char >= $80 -> 0
+        sub     $40                     ; $60..$7F -> 32..63
+        jr      rev_ok
+rev_low:
         cp      $20
-        jr      c, rev_ok
-        ld      a, d
-        sub     $60
-        cp      $20
-        jr      nc, rev_zero
-        add     a, 32
+        jr      c, rev_zero             ; char < $20 -> 0
+        cp      $40
+        jr      nc, rev_zero            ; $40..$5F -> 0
+        sub     $20                     ; $20..$3F -> 0..31
         jr      rev_ok
 rev_zero:
         xor     a
@@ -199,11 +194,14 @@ rev_ok:
         ; a = existing mask ; OR in the sprite cell mask e
         or      e
 
-        ; forward-map mask -> glyph char, write back
+        ; forward-map mask -> glyph char with A+HL only (no DE clobber),
+        ; then write back. textpixl is 64 bytes; handle L+mask page carry.
         ld      hl, textpixl
-        ld      d, 0
-        ld      e, a
-        add     hl, de
+        add     a, l
+        ld      l, a
+        jr      nc, fwd_nc
+        inc     h
+fwd_nc:
         ld      a, (hl)
         ld      hl, (sb_addr)
         ld      (hl), a
@@ -240,6 +238,3 @@ sb_base:    defw 0
 sb_addr:    defw 0
 sb_ccol:    defb 0
 sb_ccnt:    defb 0
-sb_r0:      defb 0
-sb_r1:      defb 0
-sb_r2:      defb 0
