@@ -5,7 +5,11 @@
 
     SECTION code_clib
     PUBLIC  plotpixel
+    PUBLIC  plot_fc                     ; z80_fastcall alias: HL = (x<<8)|y
+    PUBLIC  _plot_fc
 
 plotpixel:
+plot_fc:
+_plot_fc:
     defc    NEEDplot = 1
     INCLUDE "rc700_pixel6.inc"

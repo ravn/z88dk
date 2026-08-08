@@ -5,7 +5,11 @@
 
     SECTION code_clib
     PUBLIC  respixel
+    PUBLIC  unplot_fc                   ; z80_fastcall alias: HL = (x<<8)|y
+    PUBLIC  _unplot_fc
 
 respixel:
+unplot_fc:
+_unplot_fc:
     defc    NEEDunplot = 1
     INCLUDE "rc700_pixel6.inc"
