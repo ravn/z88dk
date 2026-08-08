@@ -78,7 +78,7 @@ extern void __LIB__    mallinfo_callee(unsigned int *total, unsigned int *larges
 #define free(x)        free_fastcall(x)
 #define sbrk(a,b)      sbrk_callee(a,b)
 #define calloc(a,b)    calloc_callee(a,b)
-#define realloc(a,b)   realloc_callee(b,a)  /* args swapped: clang pushes __smallc right-to-left (1st arg on top) but the classic _callee asm expects 1st arg deepest; swapping presents (p,size) in the order asm_realloc wants (hl=p, bc=size).  calloc_callee is masked by commutativity; realloc is not. */
+#define realloc(a,b)   realloc_callee(a,b)  /* natural order: under z80_smallc (ravn/llvm-z80#279) __smallc pushes LEFT-TO-RIGHT, so the 1st arg (p) lands DEEPEST -- exactly where realloc_callee.asm reads it (pop bc=size topmost; ex (sp),hl -> hl=p deeper; asm_realloc wants hl=p, bc=size).  The old realloc_callee(b,a) swap was written for the pre-#279 sdcccall(0) regime (1st arg topmost) and became a DOUBLE reversal under z80_smallc (verified broken via clang -S: it put size in hl, p in bc).  calloc_callee(a,b) is order-immune (commutative multiply); realloc is not. */
 #define mallinfo(a,b)  mallinfo_callee(a,b)
 #endif
 
@@ -109,11 +109,11 @@ extern void __LIB__    mallinfo_callee(unsigned int *total, unsigned int *larges
 extern void __LIB__    *malloc_fastcall(unsigned int size) __z88dk_fastcall;
 extern void __LIB__    free_fastcall(void *addr) __z88dk_fastcall;
 extern void __LIB__    *calloc_callee(unsigned int nobj, unsigned int size) __smallc __z88dk_callee;
-extern void __LIB__    *realloc_callee(unsigned int size, void *p) __smallc __z88dk_callee;
+extern void __LIB__    *realloc_callee(void *p, unsigned int size) __smallc __z88dk_callee;
 #define malloc(x)      malloc_fastcall(x)
 #define free(x)        free_fastcall(x)
 #define calloc(a,b)    calloc_callee(a,b)
-#define realloc(a,b)   realloc_callee(b,a)  /* args swapped: clang pushes __smallc right-to-left (1st arg on top) but the classic _callee asm expects 1st arg deepest; swapping presents (p,size) in the order asm_realloc wants (hl=p, bc=size).  calloc_callee is masked by commutativity; realloc is not. */
+#define realloc(a,b)   realloc_callee(a,b)  /* natural order under z80_smallc (see the non-STDC_ABI_ONLY path above): 1st arg (p) pushed deepest matches realloc_callee.asm (hl=p, bc=size).  The old reversed decl + realloc_callee(b,a) swap was for pre-#279 sdcccall(0) and became a double reversal (clang -S verified). */
 #endif
 
 // The following is to allow programs using the

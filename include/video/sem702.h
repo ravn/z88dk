@@ -50,37 +50,28 @@
  * the classic callee and hangs almost immediately.
  *
  * The __smallc annotation alone is necessary but NOT sufficient under
- * -compiler=llvmz80, for the same two reasons documented for bdos()/
- * z80_outp() (see cpm.h and arch/z80.h):
+ * -compiler=llvmz80.  __smallc maps to the z80_smallc calling convention
+ * (ravn/llvm-z80#279): arguments pushed LEFT-TO-RIGHT, caller-clean -- the
+ * same push ORDER the classic sccz80 worker reads (ch at the deepest slot
+ * sp+6, lines sp+4, nlines topmost at sp+2).  So a NATURAL-order
+ * sem702_loadglyph(ch,lines,nlines) declaration already lands the args
+ * correctly and NO parameter reversal is needed.  (The reversal that used to
+ * live here was required only before #279, when __smallc still meant
+ * sdcccall(0) = right-to-left, first param topmost.)
  *
- *   1. PUSH ORDER.  The classic sccz80 callee reads its args with ch at the
- *      DEEPEST stack slot and nlines at the topmost (verified from the
- *      compiled listing: ch at sp+6, lines at sp+4, nlines at sp+2 -- sp+6
- *      is the deepest arg, i.e. the one the caller pushed FIRST).  clang's
- *      sdcccall(0) pushes args so the FIRST-declared parameter ends up
- *      TOPMOST and the LAST-declared parameter DEEPEST -- the opposite
- *      mapping.  A natural sem702_loadglyph(ch,lines,nlines) declaration
- *      therefore puts ch on top / nlines deepest, exactly reversed from what
- *      the callee reads, silently swapping ch<->nlines (observed: the SEM702
- *      glyph loader wrote garbage chargen, so on-screen semigraphics text
- *      rendered as noise instead of the intended letters).
- *   2. STACK-SLOT WIDTH.  sccz80 always uses a full 2-byte stack slot per
- *      argument, even for unsigned char; clang narrows a uint8_t arg to a
- *      1-byte push (`ld a,x; push af; inc sp`), under-supplying the callee's
- *      fixed-width frame and misaligning every subsequent slot.
- *
- * Fix (same pattern as bdos()/z80_outp(), and as fread/fseek elsewhere):
- * under __LLVMZ80, bind the public name via macro to a low-level prototype
- * that (a) declares the parameters in REVERSED order so clang's push order
- * matches the classic callee, and (b) widens the two narrow (char) params to
- * int so clang emits full 2-byte pushes.  The reversed prototype is bound via
- * __asm__("sem702_loadglyph") to the SAME classic worker symbol (the z80
- * backend re-prepends the leading underscore), so no assembly changes are
- * needed.  __smallc expands to a no-op under sccz80/SDCC (see
- * <sys/compiler.h>), so the #else branch stays source-portable. */
+ * One mismatch remains, so this branch is not yet a plain natural prototype:
+ * clang still narrows an `unsigned char` argument to a single-byte push
+ * (`ld a,x; push af; inc sp`) under z80_smallc, whereas the sccz80 worker
+ * reads a fixed 2-byte slot per argument.  The two char params must therefore
+ * still be WIDENED to `unsigned int` so clang emits full 2-byte pushes.
+ * Verified with `clang --target=z80 -S`: widened args emit `ld hl,x; push hl`
+ * -- three 2-byte slots (ch deepest, lines, nlines topmost) the caller then
+ * cleans with three `pop`, matching the worker's frame exactly.  The widened
+ * prototype keeps the public symbol name, so no macro or __asm__ rename is
+ * needed; __smallc is a no-op under sccz80/SDCC (see <sys/compiler.h>), so the
+ * #else branch stays source-portable. */
 #if defined(__LLVMZ80)
-extern void __LIB__ __sem702_loadglyph_llvmz80(unsigned int nlines, const unsigned char *lines, unsigned int ch) __asm__("sem702_loadglyph") __smallc;
-#define sem702_loadglyph(a,b,c) __sem702_loadglyph_llvmz80(c,b,a)
+extern void __LIB__ sem702_loadglyph(unsigned int ch, const unsigned char *lines, unsigned int nlines) __smallc;
 #else
 void sem702_loadglyph(unsigned char ch, const unsigned char *lines, unsigned char nlines) __smallc;
 #endif
