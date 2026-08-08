@@ -69,8 +69,25 @@ crowdiv:
         inc     b
         jr      crowdiv
 crowdone:
-        ld      a, b
-        ld      (sb_crow), a
+        ; initial band base = rc700_rowaddr[crow0]. Thereafter we advance a
+        ; RUNNING base pointer by +80 per band (crow increments by exactly 1 ==
+        ; one 80-column cell-row down), so there is no per-band table lookup and
+        ; no runtime row*80 multiply -- only this one lookup for the top band.
+        ; Uses A+HL only; clobbering HL here is fine, the ex de,hl below reloads
+        ; HL from DE (the sprite pointer).
+        ld      a, b                    ; crow0 = y0/3
+        add     a, a                    ; *2 = word index (crow<=24 -> <=48)
+        ld      hl, rc700_rowaddr
+        add     a, l
+        ld      l, a
+        jr      nc, base0_nc
+        inc     h
+base0_nc:
+        ld      a, (hl)
+        inc     hl
+        ld      h, (hl)
+        ld      l, a                    ; HL = 0xF800 + crow0*80
+        ld      (sb_base), hl
 
         ex      de, hl                  ; HL = sprite pointer
         ld      a, (hl)                 ; width
@@ -101,22 +118,7 @@ band_loop:
         inc     hl
         ld      (sb_bmptr), hl          ; advance past the 3 consumed rows
 
-        ; band cell base address = rc700_rowaddr[crow], computed with A+HL only
-        ; so B,C,D (the just-loaded row bytes) are preserved (no DE clobber).
-        ld      a, (sb_crow)
-        add     a, a                    ; crow*2 = word index (crow<=24 -> <=48)
-        ld      hl, rc700_rowaddr
-        add     a, l
-        ld      l, a
-        jr      nc, base_nc
-        inc     h
-base_nc:
-        ld      a, (hl)
-        inc     hl
-        ld      h, (hl)
-        ld      l, a                    ; HL = RC700_DISPLAY + crow*80
-        ld      (sb_base), hl
-
+        ; base for this band is already in sb_base (running pointer; see below)
         ; per-cell loop across the band
         ld      a, (sb_ccol0)
         ld      (sb_ccol), a
@@ -216,10 +218,15 @@ cell_next:
         ld      (sb_ccnt), a
         jp      nz, cell_loop
 
-        ; next band: crow++, hrem -= 3
-        ld      a, (sb_crow)
-        inc     a
-        ld      (sb_crow), a
+        ; next band: advance running base by +80 (one cell-row down), hrem -= 3
+        ld      hl, (sb_base)
+        ld      a, l
+        add     a, 80
+        ld      l, a
+        jr      nc, nb_nc
+        inc     h
+nb_nc:
+        ld      (sb_base), hl
         ld      a, (sb_hrem)
         sub     3
         ld      (sb_hrem), a
@@ -230,7 +237,6 @@ blit_done:
 
         SECTION bss_clib
 sb_ccol0:   defb 0
-sb_crow:    defb 0
 sb_wcells:  defb 0
 sb_hrem:    defb 0
 sb_bmptr:   defw 0
