@@ -1,6 +1,6 @@
 # RC700 graphics examples
 
-Three semigraphics demos for the Regnecentralen RC700/RC702 (`+cpm -subtype=rc700`),
+Semigraphics demos for the Regnecentralen RC700/RC702 (`+cpm -subtype=rc700`),
 using the portable `<graphics.h>` layer on top of the gencon 2x3 sextant model
 (160 x 75 "pixels" over the 80 x 25 text screen).
 
@@ -9,10 +9,23 @@ using the portable `<graphics.h>` layer on top of the gencon 2x3 sextant model
 | `sine.c`        | sin(x) + cos(x) with axes/ticks        | `draw`/`plot`, integer sine LUT    |
 | `mandelbrot.c`  | filled Mandelbrot silhouette           | nested loops + Q6.10 fixed-point   |
 | `ball.c`        | bouncing ball, gravity + wall bounces  | `circle`/`uncircle`, `clock()` timing |
+| `pixelbench.c`  | full-screen fill/erase benchmark       | pure `plot`/`unplot` throughput    |
 
-All three are **pure integer** (no libm, no float runtime), so they build and
+All are **pure integer** (no libm, no float runtime), so they build and
 run under both the classic compiler and `-compiler=llvmz80`. For a float-based
 (`-lm` / `--math32`) function plot see the portable `../graphics/coswave.c`.
+
+### `pixelbench.c` — a measuring stick for pixel drawing
+
+`mandelbrot.c` is dominated by 32-bit fixed-point **multiply**, not by drawing,
+so its timing is a poor proxy for the pixel primitives. `pixelbench.c` instead
+does a fixed, deterministic amount of pure drawing — every T-state between
+`_main` and `_getk` is spent in `plot()` / `unplot()` — so its cycle count is a
+stable yardstick for improving the drawing path. It has **no multiply and no
+divide anywhere** (cell walking is `px += 2` / `py += 3`; the scattered sweep
+uses prime strides coprime to the 160/75 dimensions with add + one conditional
+subtract for the "mod"). Two phases: (1) cycle every sextant cell through all 64
+on/off combinations; (2) prime-stride fill then erase of all 12,000 pixels.
 
 ## Building
 
