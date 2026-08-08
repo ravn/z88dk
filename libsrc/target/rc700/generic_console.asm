@@ -7,6 +7,7 @@
     PUBLIC  generic_console_vpeek
     PUBLIC  generic_console_scrollup
     PUBLIC  generic_console_printc
+    PUBLIC  setgfx
     PUBLIC  generic_console_ioctl
     PUBLIC  generic_console_set_ink
     PUBLIC  generic_console_set_paper

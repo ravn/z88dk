@@ -29,8 +29,8 @@
 
         EXTERN  textpixl
         EXTERN  div3
-        EXTERN  generic_console_printc
-        EXTERN  generic_console_vpeek
+        EXTERN  setgfx
+        EXTERN  RC700_DISPLAY
         EXTERN  __console_w
         EXTERN  __console_h
         EXTERN  __gfx_coords
@@ -65,9 +65,31 @@
         ld      c, a                    ; c = x/2  (cell col)
         push    bc                      ; save reduced (b=row, c=col)
 
-    ; ---- read the char currently in the cell (raw mode) ----
-        ld      e, 1
-        call    generic_console_vpeek   ; a = char at (col,row)
+    ; ---- compute the VRAM cell address ONCE: RC700_DISPLAY + row*80 + col ----
+    ; VRAM is a contiguous 80x25 grid, so cell (row,col) lives at a fixed
+    ; offset row*80+col from the base -- no O(row) `xypos` djnz loop needed,
+    ; and we compute it once for both the read and the write (same cell).
+    ; row*80 = (row<<4)*5 = 16*row + 64*row, all constant-time shifts.
+        ld      l, b
+        ld      h, 0                    ; hl = row
+        add     hl, hl                  ; 2*row
+        add     hl, hl                  ; 4*row
+        add     hl, hl                  ; 8*row
+        add     hl, hl                  ; hl = 16*row
+        ld      d, h
+        ld      e, l                    ; de = 16*row
+        add     hl, hl                  ; 32*row
+        add     hl, hl                  ; 64*row
+        add     hl, de                  ; hl = 80*row
+        ld      d, 0
+        ld      e, c
+        add     hl, de                  ; + col  -> row*80 + col
+        ld      de, RC700_DISPLAY
+        add     hl, de                  ; hl = &VRAM[cell]
+        ld      (rc700_pix_addr), hl    ; stash for the write-back
+
+    ; ---- read the char currently in the cell (raw mode, hl already = addr) ----
+        ld      a, (hl)                 ; a = char at (col,row)
 
     ; ---- reverse map char -> mask (arithmetic; replaces gencon ckmap scan) --
     ; $20..$3F -> 0..31 ; $60..$7F -> 32..63 ; anything else -> 0
@@ -133,12 +155,16 @@ evencol:
         ld      d, 0
         ld      e, a
         add     hl, de
-        ld      a, (hl)
-        pop     bc                      ; b = row, c = col
-        ld      d, a
-        ld      e, 1
-        call    generic_console_printc
+        ld      a, (hl)                 ; a = char to display
+        pop     bc                      ; drop reduced coords (addr already known)
+        ld      hl, (rc700_pix_addr)
+        ld      (hl), a                 ; raw VRAM write (same cell we peeked)
+        call    setgfx                  ; re-assert gfx page, exactly as printc did
     ENDIF
 
         pop     bc                      ; restore caller's bc
         ret
+
+        SECTION bss_clib
+rc700_pix_addr:
+        defw    0
