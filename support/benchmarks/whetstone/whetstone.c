@@ -429,6 +429,22 @@ C
 
 TIMER_STOP();
 
+#ifdef SELFCHECK
+   /* Correctness gate that needs no float printf converter (unreliable on the
+      z88dk classic/llvmz80 path): module 11 iterates X = sqrt(exp(log(X)/T1))
+      and converges to 0.83467 (see readme.txt reference output).  Check X
+      against that reference within tolerance and report PASS/FAIL via %s plus
+      the scaled integer X*1e4 via %d (both converters are wired by default).
+      A broken float closure (wrong sqrt/exp/log, or a soft-float ABI bug)
+      moves X out of band and fails here before any timing is trusted. */
+   {
+      int xi = (int)(X * 10000.0);          /* want ~8347 */
+      int ok = (xi >= 8340 && xi <= 8354);
+      printf("WHET-SELFCHECK: %s (X*1e4=%d, want 8347+-7)\n",
+             ok ? "PASS" : "FAIL", xi);
+   }
+#endif
+
 #ifdef TIMEFUNC
 
    finisec = native_timer_stop();

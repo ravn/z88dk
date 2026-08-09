@@ -63,7 +63,7 @@
 extern double_t __LIB__ sin(double_t x);
 extern double_t __LIB__ cos(double_t x);
 extern double_t __LIB__ tan(double_t x);
-#ifndef __STDC_ABI_ONLY
+#if !defined(__STDC_ABI_ONLY) || (defined(__LLVMZ80) && defined(__Z80__))
 extern double_t __LIB__ sin_fastcall(double_t x) __z88dk_fastcall;
 extern double_t __LIB__ cos_fastcall(double_t x) __z88dk_fastcall;
 extern double_t __LIB__ tan_fastcall(double_t x) __z88dk_fastcall;
@@ -75,7 +75,7 @@ extern double_t __LIB__ tan_fastcall(double_t x) __z88dk_fastcall;
 extern double_t __LIB__ asin(double_t x);
 extern double_t __LIB__ acos(double_t x);
 extern double_t __LIB__ atan(double_t x);
-#ifndef __STDC_ABI_ONLY
+#if !defined(__STDC_ABI_ONLY) || (defined(__LLVMZ80) && defined(__Z80__))
 extern double_t __LIB__ asin_fastcall(double_t x) __z88dk_fastcall;
 extern double_t __LIB__ acos_fastcall(double_t x) __z88dk_fastcall;
 extern double_t __LIB__ atan_fastcall(double_t x) __z88dk_fastcall;
@@ -94,7 +94,7 @@ extern double_t __LIB__ atan2_callee(double_t y,double_t x) __smallc __z88dk_cal
 extern double_t __LIB__ sinh(double_t x) ;
 extern double_t __LIB__ cosh(double_t x) ;
 extern double_t __LIB__ tanh(double_t x) ;
-#ifndef __STDC_ABI_ONLY
+#if !defined(__STDC_ABI_ONLY) || (defined(__LLVMZ80) && defined(__Z80__))
 extern double_t __LIB__ sinh_fastcall(double_t x) __z88dk_fastcall;
 extern double_t __LIB__ cosh_fastcall(double_t x) __z88dk_fastcall;
 extern double_t __LIB__ tanh_fastcall(double_t x) __z88dk_fastcall;
@@ -106,7 +106,7 @@ extern double_t __LIB__ tanh_fastcall(double_t x) __z88dk_fastcall;
 extern double_t __LIB__ asinh(double_t x) ;
 extern double_t __LIB__ acosh(double_t x) ;
 extern double_t __LIB__ atanh(double_t x) ;
-#ifndef __STDC_ABI_ONLY
+#if !defined(__STDC_ABI_ONLY) || (defined(__LLVMZ80) && defined(__Z80__))
 extern double_t __LIB__ asinh_fastcall(double_t x) __z88dk_fastcall;
 extern double_t __LIB__ acosh_fastcall(double_t x) __z88dk_fastcall;
 extern double_t __LIB__ atanh_fastcall(double_t x) __z88dk_fastcall;
@@ -122,7 +122,7 @@ extern double_t __LIB__ sqr(double_t a) ;
 extern double_t __LIB__ sqrt(double_t a) __MATH32_ABI;
 __ZPROTO2(double_t,,pow,double_t,x,double_t,y)
 
-#ifndef __STDC_ABI_ONLY
+#if !defined(__STDC_ABI_ONLY) || (defined(__LLVMZ80) && defined(__Z80__))
 extern double_t __LIB__ inv_fastcall(double_t a) __z88dk_fastcall;
 extern double_t __LIB__ invsqrt_fastcall(double_t a) __z88dk_fastcall;
 extern double_t __LIB__ sqr_fastcall(double_t a) __z88dk_fastcall;
@@ -145,7 +145,7 @@ extern double_t __LIB__ log(double_t x) ;
 extern double_t __LIB__ log2(double_t x) ;
 extern double_t __LIB__ log10(double_t x) ;
 
-#ifndef __STDC_ABI_ONLY
+#if !defined(__STDC_ABI_ONLY) || (defined(__LLVMZ80) && defined(__Z80__))
 extern double_t __LIB__ exp_fastcall(double_t x) __z88dk_fastcall;
 extern double_t __LIB__ exp2_fastcall(double_t x) __z88dk_fastcall;
 extern double_t __LIB__ exp10_fastcall(double_t x) __z88dk_fastcall;
