@@ -1,0 +1,19 @@
+# Whetstone build artifacts (see each lane's `make clean`).
+# The lane Makefiles (e.g. llvmz80/Makefile) are the tracked source of truth;
+# everything they emit is regenerable and must not be committed.
+whet
+whetsc
+whet.bin
+whet.com
+whetsc.com
+WHET.COM
+WHETSC.COM
+whetstone.bin
+whetstone.com
+whetstone_ticks
+*.map
+*_BSS.bin
+*.ihx
+*.o
+*.tmp
+zcc_opt.def

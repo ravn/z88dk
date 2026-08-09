@@ -7,6 +7,8 @@
     PUBLIC  generic_console_vpeek
     PUBLIC  generic_console_scrollup
     PUBLIC  generic_console_printc
+    PUBLIC  setgfx
+    PUBLIC  rc700_rowaddr
     PUBLIC  generic_console_ioctl
     PUBLIC  generic_console_set_ink
     PUBLIC  generic_console_set_paper
@@ -236,6 +238,14 @@ generic_console_printc_1:
 generic_console_printc_3:
     add     hl, bc                      ;hl now points to address in display
     ret
+
+; Row-base VRAM address table used by the fast rc700 pixel routines
+; (rc700_pixel6.inc). rc700_rowaddr[row] = RC700_DISPLAY + row*80, i.e. the
+; address of column 0 of text row `row` (row = 0..24). Lets the pixel plot
+; compute a cell address with one word load instead of the O(row) xypos loop
+; or a runtime row*80 multiply.
+rc700_rowaddr:
+    defw RC700_DISPLAY+0, RC700_DISPLAY+80, RC700_DISPLAY+160, RC700_DISPLAY+240, RC700_DISPLAY+320, RC700_DISPLAY+400, RC700_DISPLAY+480, RC700_DISPLAY+560, RC700_DISPLAY+640, RC700_DISPLAY+720, RC700_DISPLAY+800, RC700_DISPLAY+880, RC700_DISPLAY+960, RC700_DISPLAY+1040, RC700_DISPLAY+1120, RC700_DISPLAY+1200, RC700_DISPLAY+1280, RC700_DISPLAY+1360, RC700_DISPLAY+1440, RC700_DISPLAY+1520, RC700_DISPLAY+1600, RC700_DISPLAY+1680, RC700_DISPLAY+1760, RC700_DISPLAY+1840, RC700_DISPLAY+1920
 
 
 generic_console_scrollup:

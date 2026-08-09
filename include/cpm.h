@@ -163,23 +163,21 @@ extern struct dpb __LIB__  *get_dpb(int drive)  __z88dk_fastcall;
 
 
 /* The CPM bdos call */
-#if defined(__LLVMZ80)
-/* The classic bdos_callee worker (cpm_bdos_callee.asm) pops "de = arg" (top
- * of stack) then "bc = func" (deeper) -- i.e. it expects func pushed first
- * (deepest), arg pushed last (topmost). clang's __smallc/sdcccall(0) always
- * pushes right-to-left with the FIRST declared parameter ending up on top,
- * so a natural-order `bdos(func,arg)` declaration pushes arg deepest and func
- * on top -- backwards from what the classic worker pops. This silently
- * swapped func/arg for every bdos() call (e.g. bdos(2,'H') executed BDOS
- * function 72 with argument 2 instead of function 2 with argument 'H',
- * surfacing as "Unsupported BDOS call 72/69/76..." -- the ASCII codes of
- * "HELLO"). Fix: bind to a reversed-order low-level prototype (arg, func)
- * so clang puts arg on top / func deepest, matching the classic worker. */
-extern int __LIB__ __bdos_llvmz80(int arg,int func) __asm__("bdos_callee") __smallc __z88dk_callee;
-#define bdos(a,b)   __bdos_llvmz80(b,a)
-extern int __LIB__ __bdosh_llvmz80(int arg,int func) __asm__("bdosh_callee") __smallc __z88dk_callee;
-#define bdosh(a,b)   __bdosh_llvmz80(b,a)
-#else
+/* The bdos_callee worker (bdos_callee.c) pops "de = arg" (top of stack) then
+ * "bc = func" (deeper) -- it expects func pushed first (deepest), arg pushed
+ * last (topmost).  __smallc is z80_smallc for llvmz80 (arguments pushed
+ * LEFT-TO-RIGHT, ravn/llvm-z80#279) and the native smallc layout for classic,
+ * so a NATURAL-order `bdos(func,arg)` declaration pushes func deepest and arg
+ * on top -- exactly what the worker pops.  Same declaration for every backend.
+ *
+ * NOTE (ravn/z88dk#52): an earlier llvmz80-only workaround bound a
+ * REVERSED-order prototype `__bdos_llvmz80(arg,func)` + a swapping macro,
+ * because __smallc used to mean sdcccall(0) (right-to-left, first param on
+ * top).  Once #279 redefined __smallc as z80_smallc (left-to-right) that
+ * reversal became a DOUBLE reversal: it put func on top, so bdos() with a
+ * pointer argument passed the pointer as the BDOS function number (garbage
+ * func e.g. 0xE8) and any bdos(func,0-arg) issued function 0 = warm boot.
+ * The natural declaration below is correct for both conventions. */
 extern int __LIB__ bdos(int func,int arg) __smallc;
 extern int __LIB__ bdos_callee(int func,int arg) __smallc __z88dk_callee;
 #define bdos(a,b)   bdos_callee(a,b)
@@ -187,7 +185,6 @@ extern int __LIB__ bdos_callee(int func,int arg) __smallc __z88dk_callee;
 extern int __LIB__ bdosh(int func,int arg) __smallc;
 extern int __LIB__ bdosh_callee(int func,int arg) __smallc __z88dk_callee;
 #define bdosh(a,b)   bdosh_callee(a,b)
-#endif
 
 
 /* Known CPM BIOS functions */

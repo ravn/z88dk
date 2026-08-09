@@ -1,0 +1,246 @@
+;
+;   RC700 cell-batched sprite blit -- PROOF OF CONCEPT (spr_or only).
+;
+;   Lever D: the generic __generic_putsprite calls plotpixel once per set pixel,
+;   paying the whole ~763 T sextant primitive (address + VRAM read + reverse-map
+;   + forward-map + write + setgfx) for EACH pixel. But up to 6 sprite pixels
+;   share one 2x3 sextant character cell, so this routine builds the 6-bit cell
+;   mask ONCE per cell and does a single read-modify-write -- amortising the
+;   fixed per-cell cost over up to 6 pixels.
+;
+;   SCOPE (PoC restrictions, deliberately narrow so the batched win can be
+;   measured without the full edge/alignment machinery):
+;     * spr_or mode only (no AND/XOR yet)
+;     * cell-aligned: x0 EVEN, y0 a MULTIPLE OF 3
+;     * width <= 8 (one bitmap byte per row), height a multiple of 3
+;   A production override of putsprite would additionally handle odd-x /
+;   misaligned-y partial edge cells, multi-byte rows, and AND/XOR.
+;
+;   Entry: __z88dk_fastcall, HL -> parameter block:
+;       +0  x0   (even, pixel col of sprite's left edge)
+;       +1  y0   (multiple of 3, pixel row of sprite's top edge)
+;       +2  spr  (word: pointer to sprite = {w, h, row bytes...})
+;
+;   Worked example: sprite {8,3, 0xFF,0x81,0x00} at x0=4, y0=6.
+;     Band 0 covers cell-row crow = y0/3 = 2, cells ccol = x0/2 = 2..5 (w/2=4).
+;     r0=0xFF (all 8 px set), r1=0x81 (ends set), r2=0x00.
+;     Cell ccol=2 takes cols 4,5: from r0 both set (bit0,bit1), r1 col4=bit(7-4=3)
+;     of 0x81=0 -> no bit2, col5=bit2 of 0x81=0 -> no bit3, r2 none.  mask=0b000011.
+;     -> RMW cell (crow=2,ccol=2): OR 0b000011 into whatever glyph is there.
+;
+        SECTION code_clib
+
+        PUBLIC  sprite_or
+        PUBLIC  _sprite_or
+
+        EXTERN  rc700_rowaddr
+        EXTERN  textpixl
+        EXTERN  setgfx
+
+; setgfx is asserted ONCE per blit, not per cell. Verified pixel-identical to
+; the per-cell-setgfx version via MAME VRAM-diff (incl. an OR-overlap): the
+; i8275 does not need the gfx page re-asserted after each cell write, so the
+; per-cell re-assert (which the per-pixel primitive inherited from printc) is
+; pure overhead here and is hoisted out of the hot loop. Measured 46.37M vs
+; 49.53M T (4000x 8x9 ball) = -6.4%, still byte-identical.
+sprite_or:
+_sprite_or:
+        push    hl
+        call    setgfx                  ; assert gfx page ONCE for the whole blit
+        pop     hl
+        ; ---- unpack the parameter block (HL -> params) ----
+        ld      a, (hl)                 ; x0
+        srl     a                       ; x0/2 = starting cell column (x0 even)
+        ld      (sb_ccol0), a
+        inc     hl
+        ld      a, (hl)                 ; y0
+        inc     hl
+        ld      e, (hl)
+        inc     hl
+        ld      d, (hl)                 ; DE = sprite pointer
+        ; crow = y0/3  (y0 is a multiple of 3; divide by repeated subtraction)
+        ld      b, 0                    ; crow accumulator
+        ld      c, a                    ; c = y0
+crowdiv:
+        ld      a, c
+        sub     3
+        jr      c, crowdone
+        ld      c, a
+        inc     b
+        jr      crowdiv
+crowdone:
+        ; initial band base = rc700_rowaddr[crow0]. Thereafter we advance a
+        ; RUNNING base pointer by +80 per band (crow increments by exactly 1 ==
+        ; one 80-column cell-row down), so there is no per-band table lookup and
+        ; no runtime row*80 multiply -- only this one lookup for the top band.
+        ; Uses A+HL only; clobbering HL here is fine, the ex de,hl below reloads
+        ; HL from DE (the sprite pointer).
+        ld      a, b                    ; crow0 = y0/3
+        add     a, a                    ; *2 = word index (crow<=24 -> <=48)
+        ld      hl, rc700_rowaddr
+        add     a, l
+        ld      l, a
+        jr      nc, base0_nc
+        inc     h
+base0_nc:
+        ld      a, (hl)
+        inc     hl
+        ld      h, (hl)
+        ld      l, a                    ; HL = 0xF800 + crow0*80
+        ld      (sb_base), hl
+
+        ex      de, hl                  ; HL = sprite pointer
+        ld      a, (hl)                 ; width
+        srl     a                       ; w/2 = cells per band
+        ld      (sb_wcells), a
+        inc     hl
+        ld      a, (hl)                 ; height
+        ld      (sb_hrem), a            ; remaining sprite rows
+        inc     hl                      ; HL -> first bitmap row byte
+        ld      (sb_bmptr), hl
+
+    ; =====================================================================
+    ; band loop: each band is 3 sprite rows == one sextant cell-row
+    ; =====================================================================
+band_loop:
+        ld      a, (sb_hrem)
+        or      a
+        jp      z, blit_done            ; no rows left
+
+        ; load the 3 row bytes of this band into B,C,D (register-resident:
+        ; the mask build shifts them in-register, no per-shift RAM round-trip).
+        ld      hl, (sb_bmptr)
+        ld      b, (hl)                 ; row0
+        inc     hl
+        ld      c, (hl)                 ; row1
+        inc     hl
+        ld      d, (hl)                 ; row2
+        inc     hl
+        ld      (sb_bmptr), hl          ; advance past the 3 consumed rows
+
+        ; base for this band is already in sb_base (running pointer; see below)
+        ; per-cell loop across the band
+        ld      a, (sb_ccol0)
+        ld      (sb_ccol), a
+        ld      a, (sb_wcells)
+        ld      (sb_ccnt), a
+
+cell_loop:
+        ; ---- build the 6-bit cell mask from the 3 row bytes in B,C,D ----
+        ; consume the 2 MSBs of each row (col0 then col1) directly in-register;
+        ; the shifted-out state stays in B/C/D for the next cell -- no RAM.
+        ld      e, 0                    ; e = accumulating mask
+        ; row0 (B) -> bit0 (col0), bit1 (col1)
+        sla     b
+        jr      nc, m_n0
+        set     0, e
+m_n0:
+        sla     b
+        jr      nc, m_n1
+        set     1, e
+m_n1:
+        ; row1 (C) -> bit2 (col0), bit3 (col1)
+        sla     c
+        jr      nc, m_n2
+        set     2, e
+m_n2:
+        sla     c
+        jr      nc, m_n3
+        set     3, e
+m_n3:
+        ; row2 (D) -> bit4 (col0), bit5 (col1)
+        sla     d
+        jr      nc, m_n4
+        set     4, e
+m_n4:
+        sla     d
+        jr      nc, m_n5
+        set     5, e
+m_n5:
+        ld      a, e
+        or      a
+        jp      z, cell_next            ; no set sub-pixels -> nothing to write
+
+        ; ---- RMW this cell: addr = base + ccol ----
+        ; uses only A and HL, so B,C,D (rows) and E (mask) survive.
+        ld      hl, (sb_base)
+        ld      a, (sb_ccol)
+        add     a, l
+        ld      l, a
+        jr      nc, addr_nc
+        inc     h
+addr_nc:
+        ; save the write address; read current glyph
+        ld      (sb_addr), hl
+        ld      a, (hl)                 ; current glyph char
+
+        ; reverse-map char -> current 6-bit mask, A-ONLY (no temp reg, so D
+        ; stays free to hold row2). Same ranges as pixel6.inc:
+        ;   $20..$3F -> 0..31 ; $60..$7F -> 32..63 ; else -> 0
+        cp      $60
+        jr      c, rev_low              ; char < $60
+        cp      $80
+        jr      nc, rev_zero            ; char >= $80 -> 0
+        sub     $40                     ; $60..$7F -> 32..63
+        jr      rev_ok
+rev_low:
+        cp      $20
+        jr      c, rev_zero             ; char < $20 -> 0
+        cp      $40
+        jr      nc, rev_zero            ; $40..$5F -> 0
+        sub     $20                     ; $20..$3F -> 0..31
+        jr      rev_ok
+rev_zero:
+        xor     a
+rev_ok:
+        ; a = existing mask ; OR in the sprite cell mask e
+        or      e
+
+        ; forward-map mask -> glyph char with A+HL only (no DE clobber),
+        ; then write back. textpixl is 64 bytes; handle L+mask page carry.
+        ld      hl, textpixl
+        add     a, l
+        ld      l, a
+        jr      nc, fwd_nc
+        inc     h
+fwd_nc:
+        ld      a, (hl)
+        ld      hl, (sb_addr)
+        ld      (hl), a
+        ; (setgfx hoisted to entry -- not re-asserted per cell)
+
+cell_next:
+        ld      a, (sb_ccol)
+        inc     a
+        ld      (sb_ccol), a
+        ld      a, (sb_ccnt)
+        dec     a
+        ld      (sb_ccnt), a
+        jp      nz, cell_loop
+
+        ; next band: advance running base by +80 (one cell-row down), hrem -= 3
+        ld      hl, (sb_base)
+        ld      a, l
+        add     a, 80
+        ld      l, a
+        jr      nc, nb_nc
+        inc     h
+nb_nc:
+        ld      (sb_base), hl
+        ld      a, (sb_hrem)
+        sub     3
+        ld      (sb_hrem), a
+        jp      band_loop
+
+blit_done:
+        ret
+
+        SECTION bss_clib
+sb_ccol0:   defb 0
+sb_wcells:  defb 0
+sb_hrem:    defb 0
+sb_bmptr:   defw 0
+sb_base:    defw 0
+sb_addr:    defw 0
+sb_ccol:    defb 0
+sb_ccnt:    defb 0
