@@ -125,8 +125,9 @@ and **c90double**, are upstream placeholders marked `NOT YET IMPLEMENTED!` in
 in `src/TODO`).  So c90base + c90lib **is** the complete implemented suite, and
 running both green under llvmz80 is full stdcbench coverage — the float/double
 modules are not disabled by a toolchain gap, they do not exist in the benchmark.
-(llvmz80 `double` support does exist separately, via `../../../llvmz80-softfloat`
-and `LLVMZ80RTLIB`, but stdcbench never calls it.)
+(llvmz80 `double` support does exist separately: `double`/`float` are 32-bit
+IEEE-754 and use the auto-linked `llvmz80_fmath.lib` math32 bridge with
+`--math32`, but stdcbench never calls it.)
 
 ### Caveats / known issues
 

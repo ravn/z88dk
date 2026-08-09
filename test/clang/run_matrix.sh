@@ -7,7 +7,7 @@
 # Classic-specific tests and known newlib gaps self-skip on the newlib runs
 # (see run_all.sh's newlib_skip_reason); everything else must pass on both.
 #
-# Usage:  [LLVMZ80EXE=... NTVCM=... LLVMZ80RTLIB=...] ./run_matrix.sh [clib ...]
+# Usage:  [LLVMZ80EXE=... NTVCM=...] ./run_matrix.sh [clib ...]
 #   default clibs: classic newlib_iy
 set -e
 DIR=$(cd "$(dirname "$0")" && pwd)

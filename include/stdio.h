@@ -344,31 +344,9 @@ extern int __LIB__ vsnprintf(char *str, size_t n,const char *fmt,void *ap);
 #define vprintf(ctl,arg) vfprintf(stdout,ctl,arg)
 #define vsprintf(buf,ctl,arg) vsnprintf(buf,65535,ctl,arg)
 
-#if defined(__LLVMZ80) && defined(__LLVMZ80_IEEE_PRINTF)
-/* ravn/llvm-z80: opt-in transparent IEEE-754 printf.
- *
- * Define __LLVMZ80_IEEE_PRINTF (e.g. `zcc ... -D__LLVMZ80_IEEE_PRINTF`, or
- * `#define __LLVMZ80_IEEE_PRINTF` before <stdio.h>) and stock
- * printf/fprintf/sprintf/snprintf route through the nanoprintf-backed shim in
- * softfloat_cpm_z80.lib, so plain `printf("%f", x)` prints correct IEEE
- * binary64 (stock z88dk printf formats z88dk's math48, giving garbage for
- * clang's doubles).  Every other specifier (%d/%s/%x/%c/%o/%u/precision/width)
- * is also handled by nanoprintf.
- *
- * NOT the default: routing pulls ~3 KB of nanoprintf, and the shim lives in the
- * softfloat archive (auto-linked only when LLVMZ80RTLIB is set).  A double
- * program already links that archive, so `%f` users pay nothing extra to opt
- * in; leaving it off keeps integer-only printf programs (which may not link the
- * softfloat lib) unaffected.  See llvmz80-softfloat/src/npf_printf.c. */
-extern int __llvmz80_printf(const char *fmt, ...);
-extern int __llvmz80_fprintf(FILE *f, const char *fmt, ...);
-extern int __llvmz80_sprintf(char *s, const char *fmt, ...);
-extern int __llvmz80_snprintf(char *s, size_t n, const char *fmt, ...);
-#define printf   __llvmz80_printf
-#define fprintf  __llvmz80_fprintf
-#define sprintf  __llvmz80_sprintf
-#define snprintf __llvmz80_snprintf
-#endif
+/* llvmz80: no printf shim needed -- `double`/`float` are 32-bit IEEE-754 and
+ * stock printf("%f") works via the auto-linked llvmz80_fmath.lib math32 bridge
+ * with --math32; no opt-in shim or environment/config variable (ravn/z88dk#43/#44). */
 
 
 // Some far variants of functions

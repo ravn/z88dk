@@ -180,34 +180,39 @@ file I/O goes through the **stdio `FILE*` layer** (complete, MAME-verified).
 
 ---
 
-# Floating-point runtime (`double`) — the `LLVMZ80RTLIB` archive
+# Floating-point runtime (`double`/`float`) — the auto-linked `llvmz80_fmath.lib` bridge
 
-clang lowers every `double` operation to compiler-rt soft-float libcalls
-(`__adddf3`/`__subdf3`/`__muldf3`/`__divdf3`, the comparisons, and the
-conversions `__floatsidf`/`__fixdfsi`/`__extendsfdf2`/`__truncdfsf2`). z88dk's
-classic clib does **not** supply these (its own small floats are 48-bit math48 /
-MBF — a different bit layout), so the runtime ships **with the llvm-z80 clang
-binary**, not inside z88dk (the compiler-rt model). It is packaged as a z80asm
-`.lib` archive `softfloat_cpm_z80.lib` (built by
-`llvmz80-softfloat/tools/build_softfloat_lib.sh`).
+On the z80 target `double` == `float` == `long double` == **32-bit IEEE-754
+binary32** (`sizeof == 4`, since ravn/llvm-z80#277). clang therefore lowers every
+floating-point operation to **single-precision** compiler-rt soft-float libcalls
+only — `__addsf3`/`__subsf3`/`__mulsf3`/`__divsf3`, the comparisons
+(`__cmpsf2`/`__unordsf2`/`__gtsf2`/`__gesf2`), and the conversions
+(`__floatsisf`/`__floatunsisf`/`__fixsfsi`/`__fixunssfsi`). It never emits any
+64-bit `df` libcall. z88dk's classic clib does not supply these under those
+compiler-rt names (its own floats are a different bit layout), so a thin
+**math32 bridge** maps them onto z88dk's 32-bit-IEEE `--math32` core. It is
+packaged as a z80asm `.lib` archive `llvmz80_fmath.lib` (built by
+`libsrc/l/llvmz80/build_fmath_lib.sh`), living **inside z88dk**.
 
-**Auto-link:** `zcc` appends the archive for `-compiler=llvmz80` when the
-config/env var **`LLVMZ80RTLIB`** points at it (full path, WITHOUT `.lib`; env
-wins over the config file, like `LLVMZ80EXE`):
+**Auto-link:** `zcc` appends the bridge for every `-compiler=llvmz80` link via
+the `LLVMZ80FMATH` config var, which has a `DESTDIR` default, so it is **on by
+default** — no env var, no explicit `-l`:
 
 ```sh
-export LLVMZ80RTLIB=/path/to/llvm-z80/lib/softfloat_cpm_z80   # no .lib suffix
-zcc +cpm -compiler=llvmz80 -o prog prog.c                     # no explicit -l
+zcc +cpm -compiler=llvmz80 --math32 -o prog prog.c   # double/%f just work
 ```
 
-Because it is an **archive**, an integer-only program that never touches a
-`double` links **byte-identically** whether or not `LLVMZ80RTLIB` is set, so the
-auto-link is unconditional (guarded only by the var being set + an actual link).
+Because it is an **archive**, an integer-only program that never touches a float
+links **byte-identically** whether or not the bridge is on the line, and the
+bridge only pulls math32's float cores when the user also passes `--math32`
+(i.e. when a float libcall is actually referenced). See
+[`MATH32_BRIDGE.md`](MATH32_BRIDGE.md). ravn/z88dk#44.
 
-Status: `(double)int` (`__floatsidf`, was ravn/llvm-z80#273) and user
-`va_start`/`va_arg` (was ravn/llvm-z80#270) are **FIXED**; `printf("%f")` works on
-both classic and newlib (`-D__LLVMZ80_IEEE_PRINTF`, ravn/z88dk#35). See the
-"Known Bugs" list in the workspace `CLAUDE.md` for the current state.
+Status: `(double)int` (`__floatsisf`) and user `va_start`/`va_arg` (was
+ravn/llvm-z80#270) are **FIXED**; classic `printf("%f")` works via stock `printf`
++ `--math32` (ravn/z88dk#43, single route). The 64-bit Berkeley-SoftFloat closure
+(`softfloat_cpm_z80.lib` / `LLVMZ80RTLIB`) and the `llvmz80-softfloat/` tree are
+**RETIRED** (ravn/z88dk#44) — obsolete since `double` became 32-bit.
 
 > **Classic `%f` — single route since ravn/z88dk#43** (reconciled 2026-08-09):
 > stock z88dk `printf` + `--math32` (verified byte-identical to sccz80,

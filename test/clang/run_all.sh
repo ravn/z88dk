@@ -121,10 +121,7 @@ newlib_skip_reason() {
         runtime_stdlib2.sh)      echo "isqrt/unbcd are classic-clib-only z88dk extensions (declared in classic include/stdlib.h, absent from newlib _DEVELOPMENT headers)"; return 0 ;;
         # (The clang integer-helper libcalls __mulhi3/__divsi3/__divmodsi4/...
         # are now provided on the newlib route by llvmz80_imath.lib -- see
-        # libsrc/l/llvmz80/newlib/ -- so runtime_qsort/intdiv/long PASS.
-        #  runtime_printf_ieee now PASSES on newlib too: the __LLVMZ80_IEEE_PRINTF
-        #  route is wired into the newlib _DEVELOPMENT stdio.h + the
-        #  llvmz80_printf_newlib.lib shim -- ravn/z88dk #35.)
+        # libsrc/l/llvmz80/newlib/ -- so runtime_qsort/intdiv/long PASS.)
     esac
     # The UNSUPPORTED sdcc_iy/sdcc_ix override forces -compiler=sdcc, so a
     # z88dk-ucpp -D__SDCC pass runs first and chokes on source-level __smallc /

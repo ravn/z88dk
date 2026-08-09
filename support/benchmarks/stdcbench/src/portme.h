@@ -59,9 +59,10 @@ typedef unsigned long stdcbench_clock_t;
  * floating-point module is item #1 in src/TODO).  They are therefore left
  * `#undef`ed here because there is nothing to run -- NOT because a toolchain
  * limitation disabled them.  This means c90base + c90lib IS the full implemented
- * stdcbench 0.8 suite; "full coverage" needs no float runtime.  (llvmz80 double
- * support does exist separately -- ../../../llvmz80-softfloat, LLVMZ80RTLIB --
- * but stdcbench never calls it.)
+ * stdcbench 0.8 suite; "full coverage" needs no float runtime.  (llvmz80
+ * double support does exist separately -- 32-bit IEEE-754 via the auto-linked
+ * llvmz80_fmath.lib math32 bridge with --math32 -- but stdcbench never calls
+ * it.)
  *
  * Module selection can be overridden from the build (so lanes that hit a
  * toolchain limitation can drop a module symmetrically and comparably):

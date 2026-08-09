@@ -75,9 +75,11 @@ lean on. **That premise is gone:** since the float32-math32 merge
 + `--math32` (Route 1) prints `%f` correctly with no extra archive and the
 portable `printf` entry point. So the nanoprintf shim is **no longer necessary
 and is retired** (user directive 2026-08-06; ravn/z88dk#43). The whole
-`llvmz80-softfloat/` closure is likewise being retired — full cleanup tracked in
-ravn/z88dk#44 and `[[project_double_is_float32_retire_softfloat]]`. Do not wire
-new code to the `__llvmz80_`-prefixed entry points.
+`llvmz80-softfloat/` closure has likewise been **RETIRED and its tree deleted**
+(ravn/z88dk#44 — the `LLVMZ80RTLIB` wiring is gone from zcc, and float libcalls
+are now resolved by the auto-linked `llvmz80_fmath.lib` math32 bridge) — see
+`[[project_double_is_float32_retire_softfloat]]`. Do not wire new code to the
+`__llvmz80_`-prefixed entry points.
 
 ## Which to use
 

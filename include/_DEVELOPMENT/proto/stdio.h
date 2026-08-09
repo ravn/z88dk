@@ -189,23 +189,8 @@ __DPROTO(,,char,*,tmpnam_ex,char *template)
 #endif
 
 
-#if defined(__LLVMZ80) && defined(__LLVMZ80_IEEE_PRINTF)
-/* ravn/llvm-z80: opt-in transparent IEEE-754 printf on the NEWLIB CP/M target
- * (ravn/z88dk #35).  Stock printf/fprintf/sprintf/snprintf route through the
- * nanoprintf-backed shim so plain printf("%f", x) prints correct IEEE binary64
- * -- z88dk's own newlib printf cannot format clang's IEEE-754 double.  Shim in
- * libsrc/l/llvmz80/newlib/llvmz80_printf_newlib.lib (linked before the softfloat
- * archive); f64 cores from softfloat_cpm_z80.lib (LLVMZ80RTLIB).  Placed OUTSIDE
- * the #ifdef __ZXNEXT block above (skipped on CP/M); plain cpp (no __DPROTO) so
- * m4 passes it through to common/stdio.h verbatim. */
-extern int __llvmz80_printf(const char *fmt, ...);
-extern int __llvmz80_fprintf(FILE *f, const char *fmt, ...);
-extern int __llvmz80_sprintf(char *s, const char *fmt, ...);
-extern int __llvmz80_snprintf(char *s, size_t n, const char *fmt, ...);
-#define printf   __llvmz80_printf
-#define fprintf  __llvmz80_fprintf
-#define sprintf  __llvmz80_sprintf
-#define snprintf __llvmz80_snprintf
-#endif
+/* llvmz80 `double`/`float` are 32-bit IEEE-754.  Stock printf("%f") works via
+ * the auto-linked llvmz80_fmath.lib math32 bridge when linking with --math32;
+ * no opt-in printf shim or environment/config variable is needed. */
 
 #endif

@@ -28,13 +28,12 @@ Detailed sources (read these for the mechanism, not just the verdict):
 
 Same model as ez80-clang (CE-Programming): z88dk ships the bridges, headers and
 copt rules; the user installs the llvm-z80 clang separately and points zcc at it.
-z88dk contains **no clang binary and no float `.lib`** — only text (asm bridges,
-headers, config).
+z88dk contains **no clang binary** — only text (asm bridges, headers, config)
+plus the small auto-linked float32 math bridge archive `llvmz80_fmath.lib`.
 
 ```sh
 export LLVMZ80EXE=/path/to/llvm-z80/build-macos/bin/clang   # or put llvmz80-clang on PATH
-export LLVMZ80RTLIB=/path/to/llvm-z80/lib/softfloat_cpm_z80  # for double / %f (no .lib suffix)
-zcc +cpm -subtype=rc700 -compiler=llvmz80 -O2 -o prog prog.c
+zcc +cpm -subtype=rc700 -compiler=llvmz80 --math32 -O2 -o prog prog.c   # double/%f: --math32, bridge auto-linked
 ```
 
 - **Compiler selection:** `-compiler=llvmz80`. Defines `-D__CLANG -D__LLVMZ80
@@ -61,7 +60,7 @@ zcc +cpm -subtype=rc700 -compiler=llvmz80 -O2 -o prog prog.c
 | **`stdio.h` — disk FILE\*** | fopen/fclose/fread/fwrite/fprintf/fscanf on real files | **MAME-verified** (16/16). Real CP/M file I/O goes through the FILE\* layer. |
 | **`stdarg.h`** | `__builtin_va_*` in user functions; variadic stdio return value | was ravn/z88dk#31 (stdio ret) + ravn/z88dk#270 (`va_start`/`va_arg`) — FIXED |
 | **Integer libcalls** | `__mulsi3`, `__divsi3`, `__udivsi3`, `__divmodsi4`, `__divhi3`, `__mulhi3`, `__udivqi3`, … | thin `libsrc/l/llvmz80/*.asm` bridges over the classic `l_*` cores |
-| **`double` (soft-float)** | +,-,*,/, compares, `__floatsidf`/`__fixdfsi`/conversions | via `softfloat_cpm_z80.lib` (`LLVMZ80RTLIB`), auto-linked. `(double)int` was #273 — FIXED |
+| **`double`/`float` (32-bit binary32)** | +,-,*,/, compares, `__floatsisf`/`__fixsfsi`/conversions | `double`==`float`==32-bit since ravn/llvm-z80#277; `sf` libcalls resolved by auto-linked `llvmz80_fmath.lib` math32 bridge (`--math32`). `(double)int` was #273 — FIXED |
 | **`printf("%f")`** | stock `printf` + `--math32` (single route since #43; converters auto-selected since #42, `#pragma printf` optional). nanoprintf closure RETIRED | see `PRINTF_FLOAT.md`. For `%e`/`%g` see row below. |
 | **Port I/O** | `address_space(2)` → `IN A,(n)`/`OUT (n),A` | ravn/llvm-z80 #1/#44 |
 | **Z80 intrinsics/attrs** | `__builtin_z80_di/ei/halt/nop/im2/set_i`; `__attribute__((z80_critical))` | ships `<intrinsic.h>` so the same source compiles under clang AND SDCC |
@@ -82,8 +81,8 @@ variants and clang matches `z80_callee`/`z80_fastcall` exactly).
 
 Works: `string.h`, `ctype`, `stdlib` (malloc/calloc/realloc/free/atoi/qsort/…),
 the full `stdio` **FILE\*** API *except real disk open* (console/stream I/O
-works), integer libcalls (via `llvmz80_imath.lib`), `double` soft-float (via
-`LLVMZ80RTLIB`), `printf("%f")` with `-D__LLVMZ80_IEEE_PRINTF`.
+works), integer libcalls (via `llvmz80_imath.lib`), 32-bit `double`/`float` (via
+the auto-linked `llvmz80_fmath.lib` math32 bridge, `--math32`).
 
 **Prefer the explicit `-clib=newlib_iy`/`newlib_ix`** — the generic `-clib=new`
 alias is not wired (ravn/z88dk#18).
@@ -96,11 +95,11 @@ alias is not wired (ravn/z88dk#18).
 |------------|-------|---------------------|
 | **`setjmp`/`longjmp`** | newlib | `setjmp` returns nonzero on the initial call (`__SMALLC` ABI mismatch). Open, left visible. **Use classic** — classic `setjmp` PASSES. (`KNOWN_GAPS.md` #3) |
 | **Disk `FILE*` I/O** | newlib | link error `asm_target_open` — CP/M newlib ships no file-open driver, tree-wide. ravn/z88dk#34 WONTFIX. **Use classic.** (`KNOWN_GAPS.md` #1) |
-| **`<math.h>` / libm** | both | `<math.h>` won't compile (`_Float16` reserved keyword); newlib libm uses a non-IEEE float format and won't link. ravn/z88dk#37. clang `double` uses the softfloat closure, not newlib math. (`KNOWN_GAPS.md` #2) |
+| **`<math.h>` / libm** | both | `<math.h>` won't compile (`_Float16` reserved keyword); newlib libm uses a non-IEEE float format and won't link. ravn/z88dk#37. clang `double` uses the auto-linked `llvmz80_fmath.lib` math32 bridge, not newlib math. (`KNOWN_GAPS.md` #2) |
 | **`printf` `%e` / `%g`** | classic | was a nanoprintf design limitation; nanoprintf is now RETIRED (#43). On stock classic `printf` these are separate converters — availability not re-verified this session; `%f` is the verified path. |
 | **POSIX fd-layer** (`open`/`read`/`write`/`close`/`lseek`) | classic `+cpm` | resolve to intentional no-op dummy stubs — the integer-fd layer does not exist on CP/M for **any** compiler. Use the `FILE*` layer. (`write()` returns the byte count correctly — ravn/z88dk#23 fixed.) |
 | **`isqrt` / `unbcd`** | newlib | classic-clib extensions, absent from newlib `_DEVELOPMENT` headers by design. Use classic. |
-| **`double` TPA cost** | both | the soft-float closure is a sizeable archive; budget TPA on 64 KB CP/M. Integer-only programs link byte-identically with or without `LLVMZ80RTLIB` set. |
+| **`double` TPA cost** | both | the 32-bit math32 bridge is small, but pulling in float math + `%f` converters still costs TPA; budget it on 64 KB CP/M. Integer-only programs link byte-identically (the bridge archive discards all unreferenced modules). |
 
 > **Note on ABI visibility:** clang-z80 default is `sdcccall(1)` — 16-bit return
 > in **DE** (not HL). This is visible in inline asm and is why the bridge fns
@@ -176,8 +175,7 @@ codegen dominate). Render output is byte-identical between `-O2` and `-O3`.
 
 ```sh
 export ZCCCFG=…/z88dk/lib/config PATH=…/z88dk/bin:$PATH
-export LLVMZ80EXE=…/llvm-z80/build-macos/bin/clang
-export LLVMZ80RTLIB=…/softfloat_cpm_z80        # for double / %f
+export LLVMZ80EXE=…/llvm-z80/build-macos/bin/clang   # double/%f: add --math32, bridge auto-linked
 
 # classic self-test matrix (ntvcm for stdout-only, MAME for file I/O):
 sh test/clang/run_all.sh

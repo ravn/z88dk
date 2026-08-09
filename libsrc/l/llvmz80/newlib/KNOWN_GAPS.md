@@ -31,7 +31,7 @@ This mirrors the newlib README's "What NOT to rely on" section
 | # | Feature | Symptom | Root cause | Status / workaround |
 |---|---------|---------|------------|---------------------|
 | 1 | **Disk `FILE*` I/O** (`fopen` of a real file) | link error: `asm_target_open` (and `_p1`/`_p2`) undefined | The CP/M newlib target ships **no file-open driver**; the hook is unimplemented tree-wide, for all compilers | ravn/z88dk#34 (WONTFIX / out of scope). **Use classic** for CP/M file I/O — the FILE\* layer works there. |
-| 2 | **`<math.h>` / libm** | (a) header won't compile: `error: _Float16 is not supported on this target`; (b) even guarded, link error `_sqrt_fastcall`, `___fixsfsi` undefined | (a) `<math.h>`'s `_FLOAT16_T` block `typedef short _Float16` — `_Float16` is a reserved clang keyword unsupported on z80. (b) newlib libm uses its **own float format**, not clang IEEE-754 `double`; some compiler-rt float libcalls absent | ravn/z88dk#37 (known gap). clang `double` uses the **softfloat closure** (`LLVMZ80RTLIB` + `mathf64`/`fmath` lib), never newlib math. |
+| 2 | **`<math.h>` / libm** | (a) header won't compile: `error: _Float16 is not supported on this target`; (b) even guarded, link error `_sqrt_fastcall`, `___fixsfsi` undefined | (a) `<math.h>`'s `_FLOAT16_T` block `typedef short _Float16` — `_Float16` is a reserved clang keyword unsupported on z80. (b) newlib libm uses its **own float format**, not clang IEEE-754 binary32; libm/transcendental entry points are not provided by the auto-linked `llvmz80_fmath.lib` math32 bridge | ravn/z88dk#37 (known gap). clang `double`/`float` use the auto-linked `llvmz80_fmath.lib` math32 bridge with `--math32`, never newlib math. |
 | 3 | **`setjmp` / `longjmp`** | `setjmp(env)` returns **nonzero** on the initial call → control jumps straight to the `longjmp` branch | `<setjmp.h>` maps `setjmp(env)` → `l_setjmp(&env)`, and `l_setjmp` is decorated `__SMALLC`; under clang the direct call reads the sccz80 stack-worker return from the wrong place (same HL-vs-DE / `__smallc`-mapping ABI class as the now-fixed regex #39 and fcntl #23) | Open, **left visible** (honest FAIL in `test/clang` newlib_iy leg). NOT force-fixed: setjmp/longjmp register save-restore makes a wrong fix dangerous. **Use classic** — classic `setjmp` PASSES. |
 | 4 | **`-clib=new` alias wiring** | historic: unresolved `_printf`, `_calloc_callee`, `_malloc_fastcall`, … at link | The generic `-clib=new` alias did not select an llvmz80 newlib link-library set | ravn/z88dk#18. The **sanctioned route is the explicit `-clib=newlib_iy` / `-clib=newlib_ix`**, which is wired and green (35 PASS in `test/clang`). Prefer the explicit clib name. |
 
@@ -52,9 +52,10 @@ So this document is not read as "newlib is broken": the newlib route is otherwis
 green (`test/clang` newlib_iy 35 PASS / 0 FAIL). Verified working: `string.h`,
 `ctype`, `stdlib` (malloc/calloc/realloc/free/atoi/qsort/…), the full `stdio`
 **FILE\*** API surface *except real disk open* (console/stream I/O works),
-integer libcalls (via `llvmz80_imath.lib`), `double` soft-float (via
-`LLVMZ80RTLIB`), and `printf("%f")` with `-D__LLVMZ80_IEEE_PRINTF`
-(ravn/z88dk#35, FIXED). ABI contract and the exact decoration→attribute mapping
+integer libcalls (via `llvmz80_imath.lib`), 32-bit IEEE-754
+`double`/`float` compiler-rt libcalls (via the auto-linked
+`llvmz80_fmath.lib` math32 bridge with `--math32`), and stock `printf("%f")`
+with `--math32` (ravn/z88dk#43, CLOSED). ABI contract and the exact decoration→attribute mapping
 are in `README.md` in this directory.
 
 ## Re-confirming any row
@@ -62,7 +63,7 @@ are in `README.md` in this directory.
 ```
 export ZCCCFG=…/z88dk/lib/config PATH=…/z88dk/bin:$PATH
 export LLVMZ80EXE=…/llvm-z80/build-macos/bin/clang
-export LLVMZ80RTLIB=…/softfloat_cpm_z80        # for double / %f
+# pass --math32 on programs that use double / float / %f
 # full newlib_iy matrix (setjmp is the one honest FAIL; file-open skipped = #34):
 TEST_CLIB=newlib_iy ZCC_CLIB=newlib_iy sh test/clang/run_all.sh
 ```

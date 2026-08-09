@@ -23,8 +23,10 @@ IEEE-754 `double`.
 
 So the first working path was to ship a **self-contained 64-bit soft-float
 runtime** with the compiler itself (Berkeley SoftFloat + compiler-rt-named
-shims, `llvmz80-softfloat`). That closure works. It is heavy for a 64 KB
-8-bit target, and has no z88dk library to lean on.
+shims, `llvmz80-softfloat`). That closure worked but was heavy for a 64 KB
+8-bit target and had no z88dk library to lean on. **It is now RETIRED and its
+tree deleted (ravn/z88dk#44)** — obsolete since `double` became 32-bit; the
+remaining live FP runtime is the math32 bridge described below.
 
 The assumption behind that whole effort was that `double` **had to be**
 64-bit — "a fixed requirement due to LLVM being written for bigger and
@@ -50,12 +52,12 @@ emitted). No link flag can retroactively turn an already-compiled 32-bit
 `__addsf3` call into a 64-bit `__adddf3` call. What *would* work, and
 *would* need no z88dk code: a new compile-time flag (e.g. `-mllvm
 -z80-double64`) that switches `DoubleWidth`/`DoubleFormat` to 64-bit
-IEEEdouble at compile time and links against the existing self-contained
-`llvmz80-softfloat` closure (Berkeley SoftFloat + compiler-rt shims, see
-above) instead of math32 — that closure already works standalone and
-needs nothing from z88dk. This has not been designed or implemented; it
-is a plausible future opt-in mode, parked here as a note, not a task in
-progress.
+IEEEdouble at compile time and links against a self-contained 64-bit
+soft-float closure. The `llvmz80-softfloat` closure that once filled that
+role has since been **RETIRED and deleted (ravn/z88dk#44)**, so this future
+opt-in would require re-vendoring a 64-bit runtime first. This has not been
+designed or implemented; it is a plausible future opt-in mode, parked here as
+a note, not a task in progress.
 
 ## 1. Why this bridge exists
 
@@ -122,8 +124,8 @@ binary32 is set unconditionally in `Z80TargetInfo`
 (`clang/lib/Basic/Targets/Z80.cpp`, `DoubleWidth = 32`) — it applies to
 *every* build of this compiler, regardless of which link flag you pass.
 There is no 64-bit `double` mode to opt in or out of via `-lm`/`--math32`
-(64-bit soft-float is a wholly separate, self-contained closure,
-`llvmz80-softfloat`, not selected by a link flag at all — see §0).
+(the separate 64-bit soft-float closure `llvmz80-softfloat` has been RETIRED
+and deleted, ravn/z88dk#44 — see §0).
 
 What `-lm` vs `--math32` (or rather, `-mllvm -z80-float-sdcccall0 -lmath32`)
 actually decides is **which of the two float-runtime implementations from
@@ -281,7 +283,8 @@ family above now links and runs; verified 2026-08-09 end-to-end on
 `z88dk-ticks` with a comprehensive arith+compare+conv program
 (`add=5.50 sub=4.75 mul=7.00 dvd=1.75 neg=-3.50`, `cmp 001101`, `i2=3 u2=3`).
 `--math32` is therefore a complete FP runtime for the llvmz80 lane, which is
-what unblocks retiring the 64-bit `llvmz80-softfloat/` closure.
+what unblocked retiring the 64-bit `llvmz80-softfloat/` closure — now **DONE**
+(tree deleted, `LLVMZ80RTLIB` wiring removed from zcc, ravn/z88dk#44).
 
 ## 5. Performance: math32 vs. compiler-rt, all 7 ops (2026-08-01, reproducible)
 
@@ -544,14 +547,14 @@ wires up neither:
   in this directory (`__addsf3.asm`, `__cmpsf2.asm`, `__floatsisf.asm`) on top
   of `-lmath32`. This is the light path and the one whose correctness is
   proven by `test/clang/runtime_float|fcmp|fconv.sh`.
-- **Path A — the softfloat closure:** link the `llvmz80-softfloat`
-  archive (Berkeley SoftFloat + compiler-rt shims incl. `src/sf32.c`), which
-  defines the `sf` symbols directly. Heavier; see §0.
+- **Path A — the softfloat closure (RETIRED, ravn/z88dk#44):** historically
+  linked the `llvmz80-softfloat` archive (Berkeley SoftFloat + compiler-rt
+  shims incl. `src/sf32.c`), which defined the `sf` symbols directly. Heavier;
+  see §0. That tree is now deleted — Path B is the sole route.
 
 Making `test/suites/math`'s `test_math32.bin` link+run under llvmz80 is
 therefore a **test-harness change** (teach that one target to add the Path-B
 ABI flag + bridge objects for `-compiler=llvmz80`), tracked separately from
-the driver fix above. Note also that at time of writing the `llvmz80-softfloat`
-Path-A archive did not rebuild cleanly (its f64 closure driver pulled
-unresolved f32 wrappers) — an independent issue in that repo, unrelated to
-either the zcc fix or this bridge.
+the driver fix above. (The `llvmz80-softfloat` Path-A archive has since been
+RETIRED and deleted, ravn/z88dk#44, so only the Path-B ABI flag + bridge
+objects remain relevant.)

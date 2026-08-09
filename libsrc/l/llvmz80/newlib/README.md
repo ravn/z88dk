@@ -54,13 +54,14 @@ register except IX. Audited (2026-07-23): no public newlib entry leaks IX
 - **Integer** (`__mulsi3`, `__divhi3`, `__mulhi3`, `__divsi3`, `__divmodsi4`,
   `__udivqi3`, …): provided by `llvmz80_imath.lib` (this directory) — thin
   adapters over newlib's bundled `l_*` cores. Linked by the CLIB line.
-- **`double`** (compiler-rt soft-float: `__adddf3`, `__muldf3`, `__floatsidf`,
-  …): resolved by `softfloat_cpm_z80.lib` via `LLVMZ80RTLIB` (auto-linked for any
-  `-compiler=llvmz80` link). `__mulsi3` is split into its own module upstream so
-  it does not clash with `llvmz80_imath.lib`'s `___mulsi3` (ravn/z88dk #35).
-- **`printf("%f")`**: stock printf can't format clang IEEE-754 double on newlib;
-  compile with `-D__LLVMZ80_IEEE_PRINTF` to route the printf family through the
-  nanoprintf shim in `llvmz80_printf_newlib.lib` (this directory). See #35.
+- **Floating point** (`double` == `float` == `long double`, 32-bit IEEE-754):
+  clang emits only single-precision compiler-rt libcalls (`__addsf3`, `__mulsf3`,
+  `__floatsisf`, …). These are resolved by the auto-linked
+  `llvmz80_fmath.lib` math32 bridge; pass `--math32` so the bridge's math32 cores
+  are pulled in. No environment/config variable is needed.
+- **`printf("%f")`**: stock printf formats llvmz80's 32-bit IEEE-754
+  `double`/`float` through the same auto-linked `llvmz80_fmath.lib` bridge when
+  linking with `--math32`. See #43.
 
 ## What NOT to rely on (deliberately not filled)
 
@@ -74,16 +75,16 @@ register except IX. Audited (2026-07-23): no public newlib entry leaks IX
 - **`<math.h>` / libm** — `<math.h>` fails to compile under llvmz80 (its
   `_FLOAT16_T` block typedefs `_Float16`, a reserved clang keyword unsupported on
   z80) AND, even guarded, newlib libm does not link (`_sqrt_fastcall` uses
-  newlib's native float format, not clang IEEE-754 `double`; some compiler-rt
-  float libcalls absent). Known gap — ravn/z88dk #37. clang doubles use the
-  softfloat closure (`LLVMZ80RTLIB`) + `mathf64`, not newlib math.
+  newlib's native float format, not clang IEEE-754 binary32; libm/transcendental
+  entry points are not provided by the auto-linked `llvmz80_fmath.lib` math32
+  bridge). Known gap — ravn/z88dk #37.
 
 ## Verification recipe (re-run to re-confirm any claim)
 
 ```
 export ZCCCFG=…/z88dk/lib/config PATH=…/z88dk/bin:$PATH
 export LLVMZ80EXE=…/llvm-z80/build-macos/bin/clang
-export LLVMZ80RTLIB=…/softfloat_cpm_z80          # for double / %f
+# pass --math32 on programs that use double / float / %f
 # ABI: confirm direct _callee/_fastcall calls, no adapter ex de,hl
 zcc +cpm -clib=newlib_iy -O2 -S -o - t.c | grep -E 'call|ex de,hl'
 # full matrix (24 PASS / 0 FAIL, only runtime_file skipped = #34):
