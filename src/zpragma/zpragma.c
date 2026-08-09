@@ -343,6 +343,46 @@ static int      auto_format = 0;
 static uint32_t auto_printf_mask = 0;
 static uint32_t auto_scanf_mask = 0;
 
+/* ravn/z88dk#59: a recognised printf/scanf call whose format argument is NOT a
+ * string literal (a variable, a call result, a ?: built at runtime) is
+ * invisible to the literal-only scan below.  That is harmless in a PURE-runtime
+ * TU -- no mask is emitted, so the CRT keeps its broad default converter table
+ * -- but in a MIXED TU, where other call sites DID use literals and therefore
+ * prune CLIB_OPT_PRINTF down to just the literal-detected converters, a runtime
+ * format may need a converter that no literal mentioned; it then silently
+ * mis-renders, the exact footgun #42 set out to kill, relocated to the
+ * non-literal path.  Record the first such site per family so emit_auto_format()
+ * can prompt for an explicit '#pragma printf' EXACTLY when pruning is active for
+ * that family (auto_*_mask != 0), staying silent otherwise to avoid noise. */
+static int  auto_printf_nonlit_line = 0;
+static char auto_printf_nonlit_file[FILENAME_MAX+1];
+static int  auto_scanf_nonlit_line = 0;
+static char auto_scanf_nonlit_file[FILENAME_MAX+1];
+
+/* True if word `w` occurs as a whole token anywhere in [s,e).  Used to tell a
+ * printf/scanf *prototype* ("int printf(const char *fmt,...)") from a real
+ * call: every such prototype declares its format parameter as some form of
+ * `char *`, so a format-argument region containing the token `char` is a
+ * declaration, not a call -- and must not trigger the #59 non-literal note.
+ * Whole-token match avoids false hits on identifiers like `charge`/`character`. */
+static int region_has_word(const char *s, const char *e, const char *w)
+{
+    size_t wl = strlen(w);
+
+    for (; s + wl <= e; s++) {
+        char before, after;
+
+        if (strncmp(s, w, wl) != 0)
+            continue;
+        before = s[-1];             /* safe: the call's "name(" precedes s */
+        after  = s[wl];
+        if (!(isalnum((unsigned char)before) || before == '_') &&
+            !(isalnum((unsigned char)after)  || after == '_'))
+            return 1;
+    }
+    return 0;
+}
+
 /* Which call argument holds the format string, per printf/scanf-family
  * function (mirrors sccz80's SetWatch, src/sccz80/callfunc.c:395).  Returns 0
  * if `name` is not a recognised format function; otherwise the 1-based index
@@ -541,15 +581,63 @@ static void scan_line_for_formats(const char *line)
 
             if (curarg == argidx) {
                 const char *f = argstart;
-                while (isspace((unsigned char)*f)) f++;
+                while (isspace((unsigned char)*f) || *f == '(') f++;   /* tolerate ("...") */
                 if (*f == '"') {
                     uint32_t m = scan_format_literal(f, is_scanf ? scanf_formats : printf_formats);
                     if (is_scanf) auto_scanf_mask |= m;
                     else          auto_printf_mask |= m;
+                } else if (*f != 0 && *f != ')' && !region_has_word(f, a, "char")) {
+                    /* recognised format call with a non-literal format (#59):
+                     * remember the first occurrence per family + its location.
+                     * The `char` guard skips function prototypes/declarations
+                     * (`int printf(const char *fmt,...)`) whose format "argument"
+                     * is a parameter declaration, not a runtime value -- these
+                     * appear inlined from headers and would otherwise be flagged
+                     * (and, being first in preprocessed order, mis-locate the note). */
+                    if (is_scanf) {
+                        if (auto_scanf_nonlit_line == 0) {
+                            auto_scanf_nonlit_line = lineno;
+                            strncpy(auto_scanf_nonlit_file, filename, sizeof(auto_scanf_nonlit_file) - 1);
+                        }
+                    } else {
+                        if (auto_printf_nonlit_line == 0) {
+                            auto_printf_nonlit_line = lineno;
+                            strncpy(auto_printf_nonlit_file, filename, sizeof(auto_printf_nonlit_file) - 1);
+                        }
+                    }
                 }
             }
         }
     }
+}
+
+/* #59: emit a one-line, actionable compile-time note when converter pruning is
+ * active for a family yet a format at a recognised call site was not a string
+ * literal.  Preprocessor line markers store the source name with surrounding
+ * quotes (sscanf "%s" keeps them), so strip a leading/trailing quote for a
+ * clean `file:line:` prefix.  This is a note, not an error -- it never fails
+ * the build; the fix is an explicit pragma listing the runtime conversions. */
+static void warn_nonliteral_format(const char *fam, const char *file, int line)
+{
+    char clean[FILENAME_MAX + 1];
+    const char *src = file;
+    size_t n;
+
+    if (*src == '"')
+        src++;                       /* drop opening quote from the marker */
+    strncpy(clean, src, sizeof(clean) - 1);
+    clean[sizeof(clean) - 1] = 0;
+    n = strlen(clean);
+    if (n && clean[n - 1] == '"')
+        clean[n - 1] = 0;            /* drop closing quote */
+
+    fprintf(stderr,
+        "%s:%d: note: %s format argument is not a string literal; -autoformat "
+        "cannot auto-select converters for it. Other call sites in this file "
+        "prune the %s converter table, so a converter used only by this runtime "
+        "format may be missing at runtime -- add an explicit "
+        "'#pragma %s = \"...\"' listing the conversions it uses.\n",
+        clean[0] ? clean : "<stdin>", line, fam, fam, fam);
 }
 
 /* Emit the accumulated converter masks into zcc_opt.def using the exact
@@ -566,6 +654,16 @@ static void emit_auto_format(void)
 
     if (auto_printf_mask == 0 && auto_scanf_mask == 0)
         return;
+
+    /* #59: prompt for an explicit pragma only in the MIXED-TU footgun -- the
+     * family's converter table is being pruned (auto_*_mask != 0) AND a
+     * non-literal format call the scan could not see exists in this TU.  A
+     * pure-runtime TU (mask == 0) is skipped: nothing is emitted, so the CRT
+     * keeps the broad default table and the runtime format is safe. */
+    if (auto_printf_mask && auto_printf_nonlit_line)
+        warn_nonliteral_format("printf", auto_printf_nonlit_file, auto_printf_nonlit_line);
+    if (auto_scanf_mask && auto_scanf_nonlit_line)
+        warn_nonliteral_format("scanf", auto_scanf_nonlit_file, auto_scanf_nonlit_line);
 
     if ((fp = fopen(c_zcc_opt, "a")) == NULL) {
         fprintf(stderr, "%s: Cannot open %s file\n", filename, c_zcc_opt);
