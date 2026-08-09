@@ -1419,7 +1419,13 @@ int main(int argc, char **argv)
             /* past clang+llvm related pre-processing */
             if (compiler_type == CC_SDCC || compiler_type == CC_EZ80CLANG || compiler_type == CC_LLVMZ80) {
                 char zpragma_args[1024];
-                snprintf(zpragma_args, sizeof(zpragma_args),"-zcc-opt=\"%s\"", zcc_opt_def);
+                /* -autoformat makes zpragma replicate sccz80's printf/scanf
+                 * converter auto-selection for llvmz80 (ravn/z88dk#42), so a
+                 * stock printf("%f") pulls the float converter instead of
+                 * silently printing a literal 'f'.  Scoped to llvmz80 for now;
+                 * flip in CC_SDCC here to extend it to the zsdcc lane. */
+                snprintf(zpragma_args, sizeof(zpragma_args), "-zcc-opt=\"%s\"%s", zcc_opt_def,
+                         compiler_type == CC_LLVMZ80 ? " -autoformat" : "");
                 if (process(ft == CXXFILE ? ".cpp" : ".c", ".i2", c_cpp_exe, cpparg, c_stylecpp, i, YES, YES))
                     exit(1);
                 if (process(".i2", ".i", c_zpragma_exe, zpragma_args, filter, i, YES, NO))

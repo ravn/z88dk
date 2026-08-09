@@ -330,6 +330,277 @@ static uint64_t parse_format_string(char *arg, CONVSPEC *specifiers)
     return format_option;
 }
 
+/* -autoformat: replicate, for the external frontends (llvmz80/zsdcc), the
+ * printf/scanf converter auto-selection that sccz80 does internally.  Without
+ * it, a stock `printf("%f")` under -compiler=llvmz80 silently prints a literal
+ * 'f' because the default converter table omits float (ravn/z88dk#42): only
+ * sccz80 scans the format-string literals at compile time and emits the
+ * CRT_printf_format bitmask.  zpragma already has the converter tables and
+ * runs on every external-frontend translation unit, and -- unlike the clang
+ * frontend, which is invoked `-ffreestanding` and emits no converter mask in
+ * any case -- it is frontend-agnostic, so the scan belongs here. */
+static int      auto_format = 0;
+static uint32_t auto_printf_mask = 0;
+static uint32_t auto_scanf_mask = 0;
+
+/* Which call argument holds the format string, per printf/scanf-family
+ * function (mirrors sccz80's SetWatch, src/sccz80/callfunc.c:395).  Returns 0
+ * if `name` is not a recognised format function; otherwise the 1-based index
+ * of the format argument, and sets *is_scanf.  Example: fprintf -> 2 (the
+ * format follows the FILE*), snprintf -> 3 (buf, size, format). */
+static int format_arg_index(const char *name, int *is_scanf)
+{
+    *is_scanf = 0;
+    if (!strcmp(name, "printf") || !strcmp(name, "printk") || !strcmp(name, "vprintf"))
+        return 1;
+    if (!strcmp(name, "fprintf") || !strcmp(name, "sprintf") ||
+        !strcmp(name, "vfprintf") || !strcmp(name, "vsprintf"))
+        return 2;
+    if (!strcmp(name, "snprintf") || !strcmp(name, "vsnprintf"))
+        return 3;
+    *is_scanf = 1;
+    if (!strcmp(name, "scanf") || !strcmp(name, "vscanf"))
+        return 1;
+    if (!strcmp(name, "fscanf") || !strcmp(name, "vfscanf") ||
+        !strcmp(name, "sscanf") || !strcmp(name, "vsscanf"))
+        return 2;
+    return 0;
+}
+
+/* Scan a REAL format-string literal (with intervening literal text) for the
+ * conversions it uses and OR the corresponding converter bits into a 32-bit
+ * mask.  This mirrors sccz80's SetMiniFunc (src/sccz80/callfunc.c:521), NOT
+ * the pragma-oriented parse_format_string above: parse_format_string treats
+ * every non-`%` token as a conversion (correct for the `#pragma printf =
+ * "%f %d"` token list) and would mis-read literal text like "v=%6.1f" ('v',
+ * 'a', ... as bogus specifiers).  Here we react ONLY to text right after a
+ * `%`, skip `%%`, then flags/width/precision/length before the conversion
+ * char -- e.g. "v=%6.1f|d=%d" -> 0x04000000 (f) | 0x00000001 (d).
+ *
+ * `arg` points at the opening quote of the literal; scanning stops at the
+ * matching closing quote (with C adjacent-string-literal concatenation:
+ * "a" "b" is one string), so text after the format string on the same source
+ * line -- e.g. a later puts("...printf(%f)...") -- is NOT mis-scanned.
+ *
+ * The `ll` (long long) converters live in the separate CLIB_OPT_PRINTF_2
+ * channel that the CRT_printf_format bitmask does not carry, so a doubled
+ * length modifier folds to the long (lval) bit here -- the same reach sccz80's
+ * 32-bit path has; a program needing %lld must still use an explicit pragma. */
+static uint32_t scan_format_literal(const char *arg, CONVSPEC *specifiers)
+{
+    uint32_t mask = 0;
+
+    for (;;) {
+        char c;
+
+        if (*arg != '"')            /* start (or resume) of a string literal */
+            break;
+        arg++;                      /* step over the opening quote */
+
+        while ((c = *arg) != 0 && c != '"') {
+            if (c == '\\' && arg[1]) {   /* escape: skip the escaped char */
+                arg += 2;
+                continue;
+            }
+            if (c != '%') {
+                arg++;
+                continue;
+            }
+            arg++;                       /* consume '%' */
+            if (*arg == '%') {           /* "%%" -- a literal percent */
+                arg++;
+                continue;
+            }
+            int islong = 0;
+            const char *before = arg;
+            while (*arg == '-' || *arg == '+' || *arg == ' ' || *arg == '#' || *arg == '0')
+                arg++;                   /* flags */
+            while (isdigit((unsigned char)*arg) || *arg == '.' || *arg == '*')
+                arg++;                   /* width / precision (incl. * and .) */
+            if (arg != before)           /* any flag/width/precision seen */
+                mask |= 0x40000000;      /* -> enable printf flags handling */
+            if (*arg == 'l') {           /* length modifiers */
+                arg++;
+                islong = 1;
+                if (*arg == 'l') arg++;  /* ll -> folds to long on this channel */
+            } else if (*arg == 'h') {
+                arg++;
+                if (*arg == 'h') arg++;
+            } else if (*arg == 'z' || *arg == 'j' || *arg == 't') {
+                arg++;
+            }
+            if (*arg == 0 || *arg == '"')
+                break;
+            CONVSPEC *fmt = specifiers;
+            while (fmt->fmt) {
+                if (fmt->fmt == *arg) {
+                    mask |= islong ? fmt->lval : fmt->val;
+                    if (*arg == '[') {   /* scanf %[...] set: skip to ']' */
+                        while (arg[1] && *arg != ']') arg++;
+                    }
+                    break;
+                }
+                fmt++;
+            }
+            if (*arg) arg++;             /* step past the conversion char */
+        }
+        if (c == '"') arg++;            /* step over the closing quote */
+
+        /* C adjacent string-literal concatenation: "a" "b" is one format */
+        while (isspace((unsigned char)*arg)) arg++;
+        if (*arg != '"')
+            break;
+    }
+    return mask;
+}
+
+/* Auto-detect printf/scanf converters actually used at call sites in one line
+ * of preprocessed source and OR their bits into the running masks.  Heuristic
+ * (matching sccz80's literal-only reach): find a format-function identifier
+ * followed by '(', walk to its format argument, and if that argument is a
+ * string literal, scan it.  Destination/stream/size arguments are never string
+ * literals, so using the correct format-argument index keeps e.g. the input
+ * string of `sscanf("3.14", "%f", &x)` from being mistaken for the format.
+ *
+ * Scan is line-scoped: a format literal on the same line as the call name is
+ * seen (the overwhelmingly common shape post-preprocessing), a format passed
+ * via a variable or split onto a later line is not -- exactly as invisible to
+ * sccz80, and the user then falls back to an explicit `#pragma printf`.
+ * String/char literals are skipped when hunting the call identifier so the
+ * word "printf" inside a string is never taken for a call. */
+static void scan_line_for_formats(const char *line)
+{
+    const char *p = line;
+
+    while (*p) {
+        if (*p == '"' || *p == '\'') {          /* skip over a literal */
+            char q = *p++;
+            while (*p && *p != q) {
+                if (*p == '\\' && p[1]) p++;
+                p++;
+            }
+            if (*p) p++;
+            continue;
+        }
+        if (!(isalpha((unsigned char)*p) || *p == '_')) {
+            p++;
+            continue;
+        }
+        if (p != line && (isalnum((unsigned char)p[-1]) || p[-1] == '_')) {
+            while (isalnum((unsigned char)*p) || *p == '_') p++;   /* mid-identifier */
+            continue;
+        }
+        {
+            char        name[NAMESIZE + 1];
+            int         n = 0;
+            const char *q;
+            int         is_scanf, argidx;
+            const char *a, *argstart;
+            int         depth, curarg;
+
+            while ((isalnum((unsigned char)*p) || *p == '_') && n < NAMESIZE)
+                name[n++] = *p++;
+            name[n] = 0;
+
+            q = p;
+            while (isspace((unsigned char)*q)) q++;
+            if (*q != '(')                       /* not a call */
+                continue;
+
+            argidx = format_arg_index(name, &is_scanf);
+            if (argidx == 0)
+                continue;
+
+            /* walk to the argidx-th top-level argument of the call */
+            a = q + 1;
+            argstart = a;
+            depth = 1;
+            curarg = 1;
+            while (*a && depth > 0) {
+                if (*a == '"' || *a == '\'') {
+                    char qq = *a++;
+                    while (*a && *a != qq) {
+                        if (*a == '\\' && a[1]) a++;
+                        a++;
+                    }
+                    if (*a) a++;
+                    continue;
+                }
+                if (*a == '(' || *a == '[' || *a == '{') {
+                    depth++;
+                } else if (*a == ')' || *a == ']' || *a == '}') {
+                    depth--;
+                    if (depth == 0) break;
+                } else if (*a == ',' && depth == 1) {
+                    if (curarg == argidx) break;
+                    curarg++;
+                    argstart = a + 1;
+                }
+                a++;
+            }
+
+            if (curarg == argidx) {
+                const char *f = argstart;
+                while (isspace((unsigned char)*f)) f++;
+                if (*f == '"') {
+                    uint32_t m = scan_format_literal(f, is_scanf ? scanf_formats : printf_formats);
+                    if (is_scanf) auto_scanf_mask |= m;
+                    else          auto_printf_mask |= m;
+                }
+            }
+        }
+    }
+}
+
+/* Emit the accumulated converter masks into zcc_opt.def using the exact
+ * OR-combining idiom sccz80 uses (src/sccz80/main.c:555): CRT_printf_format /
+ * CRT_scanf_format is the compiler-auto-detected channel, which the CRT
+ * (lib/crt/classic/crt_runtime_selection.inc) copies into CLIB_OPT_PRINTF
+ * only when the user has NOT set an explicit `#pragma printf` (CLIB_OPT_PRINTF)
+ * -- so an explicit pragma still wins.  The IF/ELSE/UNDEFINE dance OR-combines
+ * masks across translation units, since each unit's zpragma run appends its
+ * own block to the shared zcc_opt.def. */
+static void emit_auto_format(void)
+{
+    FILE *fp;
+
+    if (auto_printf_mask == 0 && auto_scanf_mask == 0)
+        return;
+
+    if ((fp = fopen(c_zcc_opt, "a")) == NULL) {
+        fprintf(stderr, "%s: Cannot open %s file\n", filename, c_zcc_opt);
+        exit(1);
+    }
+
+    if (auto_printf_mask) {
+        fprintf(fp, "\nIF !DEFINED_CRT_printf_format\n");
+        fprintf(fp, "\tdefc\tDEFINED_CRT_printf_format = 1\n");
+        fprintf(fp, "\tdefc CRT_printf_format = 0x%08x\n", auto_printf_mask);
+        fprintf(fp, "ELSE\n");
+        fprintf(fp, "\tUNDEFINE temp_printf_format\n");
+        fprintf(fp, "\tdefc temp_printf_format = CRT_printf_format\n");
+        fprintf(fp, "\tUNDEFINE CRT_printf_format\n");
+        fprintf(fp, "\tdefc CRT_printf_format = temp_printf_format | 0x%08x\n", auto_printf_mask);
+        fprintf(fp, "ENDIF\n\n");
+        fprintf(fp, "\nIF !NEED_printf\n\tDEFINE\tNEED_printf\nENDIF\n\n");
+    }
+
+    if (auto_scanf_mask) {
+        fprintf(fp, "\nIF !DEFINED_CRT_scanf_format\n");
+        fprintf(fp, "\tdefc\tDEFINED_CRT_scanf_format = 1\n");
+        fprintf(fp, "\tdefc CRT_scanf_format = 0x%08x\n", auto_scanf_mask);
+        fprintf(fp, "ELSE\n");
+        fprintf(fp, "\tUNDEFINE temp_scanf_format\n");
+        fprintf(fp, "\tdefc temp_scanf_format = CRT_scanf_format\n");
+        fprintf(fp, "\tUNDEFINE CRT_scanf_format\n");
+        fprintf(fp, "\tdefc CRT_scanf_format = temp_scanf_format | 0x%08x\n", auto_scanf_mask);
+        fprintf(fp, "ENDIF\n\n");
+        fprintf(fp, "\nIF !NEED_scanf\n\tDEFINE\tNEED_scanf\nENDIF\n\n");
+    }
+
+    fclose(fp);
+}
+
 int main(int argc, char **argv)
 {
     int     i;
@@ -338,6 +609,8 @@ int main(int argc, char **argv)
     for ( i = 1 ; i < argc; i++ ) {
         if (strcmp(argv[i],"-sccz80") == 0 ) {
             sccz80_mode = 1;
+        } else if ( strcmp(argv[i],"-autoformat") == 0 ) {
+            auto_format = 1;
         } else if ( strncmp(argv[i],"-zcc-opt=", 9) == 0 ) {
             c_zcc_opt = argv[i] + 9;
         }
@@ -348,6 +621,11 @@ int main(int argc, char **argv)
 
     while ( fgets(buf, sizeof(buf) - 1, stdin) != NULL ) {
         lineno++;
+        /* Scan the pristine line for printf/scanf call-site converters before
+         * any handler below rewrites buf (ravn/z88dk#42).  A `#pragma printf`
+         * line has `printf =` not `printf(` so it never matches here. */
+        if ( auto_format )
+            scan_line_for_formats(buf);
         ptr = skip_ws(buf);
         if ( strncmp(ptr,"#pragma", 7) == 0 ) {
             int  ol = 1;
@@ -464,4 +742,11 @@ int main(int argc, char **argv)
             fputs(buf,stdout);
         }
     }
+
+    /* Flush the auto-detected converter masks (if any) into zcc_opt.def so the
+     * CRT links exactly the printf/scanf converters this unit actually used. */
+    if ( auto_format )
+        emit_auto_format();
+
+    return 0;
 }
