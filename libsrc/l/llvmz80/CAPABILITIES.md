@@ -62,7 +62,7 @@ zcc +cpm -subtype=rc700 -compiler=llvmz80 -O2 -o prog prog.c
 | **`stdarg.h`** | `__builtin_va_*` in user functions; variadic stdio return value | was ravn/z88dk#31 (stdio ret) + ravn/z88dk#270 (`va_start`/`va_arg`) — FIXED |
 | **Integer libcalls** | `__mulsi3`, `__divsi3`, `__udivsi3`, `__divmodsi4`, `__divhi3`, `__mulhi3`, `__udivqi3`, … | thin `libsrc/l/llvmz80/*.asm` bridges over the classic `l_*` cores |
 | **`double` (soft-float)** | +,-,*,/, compares, `__floatsidf`/`__fixdfsi`/conversions | via `softfloat_cpm_z80.lib` (`LLVMZ80RTLIB`), auto-linked. `(double)int` was #273 — FIXED |
-| **`printf("%f")`** | two routes: nanoprintf closure, OR stock printf + `#pragma printf` + `--math32` | see `PRINTF_FLOAT.md`. `%e`/`%g` NOT supported (nanoprintf design). |
+| **`printf("%f")`** | two routes: nanoprintf closure, OR stock printf + `--math32` (converters auto-selected since #42; `#pragma printf` optional) | see `PRINTF_FLOAT.md`. `%e`/`%g` NOT supported (nanoprintf design). |
 | **Port I/O** | `address_space(2)` → `IN A,(n)`/`OUT (n),A` | ravn/llvm-z80 #1/#44 |
 | **Z80 intrinsics/attrs** | `__builtin_z80_di/ei/halt/nop/im2/set_i`; `__attribute__((z80_critical))` | ships `<intrinsic.h>` so the same source compiles under clang AND SDCC |
 

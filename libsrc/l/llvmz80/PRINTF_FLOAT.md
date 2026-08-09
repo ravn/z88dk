@@ -15,24 +15,28 @@ it is how z88dk's *modular* classic `printf` selects converters:
   chosen by the `CRT_printf_format` bitmask (`%f` = `0x04000000`).
 - **sccz80** auto-scans the format-string literals at compile time and emits the
   mask automatically (`src/sccz80/callfunc.c` + `src/sccz80/main.c`).
-- **zsdcc and llvmz80 do NOT** auto-scan (they are external/stock frontends), so
-  they fall back to the library default table
-  `libsrc/classic/stdio/__printf_format_table.asm`, which deliberately omits
-  `f`/`e`. At runtime `asm_printf`'s `no_format_found` path prints the spec
-  character literally and does not consume the vararg -> `v=f` + desync.
+- **zsdcc** does NOT auto-scan (external/stock frontend), so it falls back to the
+  library default table `libsrc/classic/stdio/__printf_format_table.asm`, which
+  deliberately omits `f`/`e`. At runtime `asm_printf`'s `no_format_found` path
+  prints the spec character literally and does not consume the vararg -> `v=f` +
+  desync.
+- **llvmz80 DOES auto-scan as of ravn/z88dk#42**: the `-compiler=llvmz80` driver
+  runs `zpragma -autoformat`, which scans the call sites and selects the classic
+  converters exactly like sccz80 — so the trap above no longer bites on this lane
+  (only `--math32` is still required). The explicit-pragma route below stays
+  valid (and is still the answer for zsdcc, or to prune the set by hand).
 
-The wiki documents this for zsdcc ("if you use incremental builds or zsdcc then
-you will need to configure the list of converters"); llvmz80 is in the same
-category. See ravn/z88dk#25 (dhrystone) and #42 (auto-selection gap /
-diagnostic).
+The wiki documents the underlying mechanism for zsdcc ("if you use incremental
+builds or zsdcc then you will need to configure the list of converters"); see
+ravn/z88dk#25 (dhrystone) and #42 (llvmz80 auto-selection, now implemented).
 
-## Route 1 (stock z88dk printf): `#pragma printf` + `--math32`
+## Route 1 (stock z88dk printf) — just `--math32` (pragma optional since #42)
 
-Force the converter set explicitly and link z88dk's 32-bit-IEEE float core:
+On the llvmz80 lane the converters are auto-selected, so a stock program needs
+**only** `--math32`; no `#pragma printf` is required:
 
 ```c
 #include <stdio.h>
-#pragma printf = "%6.1f %d %s"   /* list EVERY conversion used, width form incl. */
 int main(void){ printf("v=%6.1f|d=%d\n", 3.5, 42); return 0; }
 ```
 ```sh
@@ -40,15 +44,23 @@ zcc +cpm -compiler=llvmz80 --math32 -O2 prog.c -o prog.com -create-app
 # v=   3.5|d=42   (byte-identical to sccz80)
 ```
 
-Two requirements, both verified necessary:
+An explicit `#pragma printf = "%6.1f %d %s"` (list every conversion, width form
+included) still works and **wins** over the auto-scan — use it to prune the set
+by hand, or when building on the **zsdcc** lane (which has no `-autoformat`).
 
-1. **`--math32`** supplies `asm_fpclassify` / `__dtoa_base10` / `__dtoa_digits`
-   in **32-bit IEEE-754**, matching clang's `double`. Without it the `%f`
-   converter fails to link (`undefined symbol: __dtoa_digits`). (The default
-   genmath float is 48-bit math48 — wrong layout for clang.)
-2. **The width form in the pragma** (`%6.1f`, not bare `%f`): the classic library
-   distinguishes `%d` from `%0d`/formatted (wiki), so bare `%f` links only the
-   unformatted path and `%6.1f` at the call site prints literally.
+Requirements:
+
+1. **`--math32`** (always) supplies `asm_fpclassify` / `__dtoa_base10` /
+   `__dtoa_digits` in **32-bit IEEE-754**, matching clang's `double`. Without it
+   the `%f` converter fails to link (`undefined symbol: asm_fpclassify` /
+   `__dtoa_digits`) — which now turns the old silent-`f` footgun into an
+   actionable build error. (The default genmath float is 48-bit math48 — wrong
+   layout for clang.)
+2. **Width form** (`%6.1f`, not bare `%f`) — relevant only if you write the
+   pragma by hand: the classic library distinguishes `%d` from `%0d`/formatted
+   (wiki), so a bare-`%f` pragma links only the unformatted path and a `%6.1f`
+   call prints literally. The `-autoformat` scan handles this automatically
+   (it sets the flags-handling bit on any width/precision).
 
 ## Route 2 (nanoprintf closure): `__llvmz80_printf`
 
@@ -59,8 +71,8 @@ without `--math32`. Note: `%e`/`%g` are a permanent nanoprintf design exception.
 
 ## Which to use
 
-- Only need `%f` output (no double arithmetic): **Route 1** is simplest — one
-  pragma + `--math32`, no extra archive.
+- Only need `%f` output (no double arithmetic): **Route 1** is simplest — just
+  `--math32` (converters auto-selected; no pragma, no extra archive).
 - Already linking `softfloat_cpm_z80.lib` for double math, or want `%f` without
   `--math32`: **Route 2**.
 
