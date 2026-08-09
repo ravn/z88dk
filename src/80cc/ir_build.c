@@ -619,7 +619,7 @@ static const char *acc_name(const char *stem)
     if (!strcmp(stem, "ge"))       return f64 ? "l_f64_ge"  : "dge";
     if (!strcmp(stem, "eq"))       return f64 ? "l_f64_eq"  : "deq";
     if (!strcmp(stem, "ne"))       return f64 ? "l_f64_ne"  : "dne";
-    if (!strcmp(stem, "neg"))      return f64 ? "l_f64_neg"    : "minusfa";
+    if (!strcmp(stem, "neg"))      return f64 ? "l_f64_negate" : "minusfa";
     if (!strcmp(stem, "ftof16"))   return f64 ? "l_f64_ftof16" : "l_f48_ftof16";
     if (!strcmp(stem, "f16tof"))   return f64 ? "l_f64_f16tof" : "l_f48_f16tof";
     if (!strcmp(stem, "sint2f"))   return f64 ? "l_f64_sint2f"  : "l_int2long_s_float";
@@ -1408,8 +1408,8 @@ static int emit_const_mult_sr(Builder *b, int v, int64_t C, int w)
        add hl,de) the inline chain wins across the whole range — inline any int
        constant (max hi_bit+pop is 31). A LONG chain doubles/adds 32 bits per
        step (several ops each) and competes with l_long_mult, so keep the
-       tighter bound there. (An LCG's *25173 = 14+7 = 21 was just over the old
-       flat 20 and fell to l_mult → histbench -41%.) */
+       tighter bound there. (A flat bound near 20 wrongly fell back to l_mult
+       for constants like *25173 = 14+7 = 21, a large regression.) */
     if (hi_bit + pop <= (w == 2 ? 32 : 20)) {
         int acc = v;                            /* coefficient for 2^hi_bit */
         for (int bit = hi_bit - 1; bit >= 0; bit--) {
@@ -5400,9 +5400,9 @@ static int build_assign(Builder *b, Node *n)
        KIND_ARRAY long-element stores (`in[i] = long`) are gated
        off in sp mode only. With byte-pack + pointer-spill-skip +
        offset folds + the stack-free long store + post-step
-       fusion, fp mode is a net win on md5 so fp ungates; sp still
-       trails (the per-input-byte copy loop's slot walks), so sp
-       stays gated until that flips too. */
+       fusion, fp mode is a net win so fp ungates; sp still trails
+       (the per-input-byte copy loop's slot walks), so sp stays
+       gated until that flips too. */
     /* Address-yielding __far LHS (`fp[i] = v`, `*(fp+K) = v`): the
        parser folds the subscript-assign into a bare far-pointer
        expression (OP_ADD, type CPTR). Store through an lp_p* helper. */
@@ -5569,8 +5569,7 @@ static int build_cast(Builder *b, Node *n)
        steps the pointer, and zero-extends to long — bypassing the
        default 3-op IR sequence (IR_LD_MEM byte + IR_INC p +
        IR_CONV_ZX byte→long) which forces a byte spill across the
-       IR_INC. Hot inner pattern in crcbench's crc32 (per-byte
-       loop). */
+       IR_INC. Hot inner pattern in per-byte checksum loops. */
     if (dst_w == 4 && src_w == 1
         && n->operand
         && n->operand->ast_type == OP_DEREF
@@ -6427,7 +6426,7 @@ static int build_binop_integer(Builder *b, Node *n, OpKind k, int hint)
        constant in [0,255] (`c == ' '`, `c >= 'a'`, `c <= 'z'`) stays a byte `cp`
        instead of widening c to int for a 16-bit compare — the C-promotion is
        value-preserving here, and a widened compare reloads/extends c per test
-       (lexbench classify: ~7 instrs/test vs 2). All EQ/NE and unsigned relations:
+       (~7 instrs/test vs 2). All EQ/NE and unsigned relations:
        ULE/UGT are canonicalised below to `<K+1`/`>=K+1` at the kept byte width, so
        K<=254 folds to a byte ULT/UGE and K==255 constant-folds (`eff>=tmax`) — both
        correct. Unsigned LHS so the zero-extended value is exactly the byte. */
@@ -7052,8 +7051,19 @@ static int build_stmt(Builder *b, Node *n)
                       ? get_or_create_label_bb(b, n->loop_step_label)
                       : ir_bb_new(b->f);
 
-        /* Pre-test: if counter==0, skip the loop. */
-        ir_emit_br_zero(cur_bb(b), counter, exit_bb);
+        /* Pre-test: if counter==0, skip the loop. When the trip count is a
+           compile-time-constant NON-ZERO literal (`for (i=0;i<K;i++)`, K const)
+           the guard can never fire — mark it a PHANTOM (imm=1): the CFG edge to
+           exit is kept (so the allocator sees the same liveness as a real guard
+           and does not perturb the loop's allocation), but the lowerer emits no
+           code for it (gen_br_zero). Nets the dead `ld a,h; or l; jp z` bytes
+           with zero allocation change. */
+        {
+            Op *g = ir_emit_br_zero(cur_bb(b), counter, exit_bb);
+            if (g && n->loop_init->ast_type == AST_LITERAL
+                && n->loop_init->zval != 0)
+                g->imm = IR_BRZ_PHANTOM;
+        }
         ir_emit_br(cur_bb(b), header_bb);
 
         b->cur_bb_id = header_bb;
@@ -7477,6 +7487,43 @@ static int ir_generate_code_impl(Node *body, SYMBOL *fn)
             }
         }
     }
+
+    /* Volatile correctness: a DIRECT access to a volatile global (IR_MEM_SYM)
+       must never be CSE'd or forwarded away — each read/write is an observable
+       side effect. The per-access builders stamp mem.volatile_ for pointer
+       derefs, but the direct-symbol paths did not, so ir_opt's st2ld/cse would
+       fold e.g. `vg + vg` to a single load. Normalise centrally here — after the
+       body is built, before ir_lower runs ir_opt — from the symbol's own type. */
+    for (int vb = 0; vb < f->n_bbs; vb++)
+        for (int vj = 0; vj < f->bbs[vb].n_ops; vj++) {
+            Op *o = &f->bbs[vb].ops[vj];
+            /* __sfr I/O port: the symbol is a PORT NUMBER, not storage, so a
+               direct access must become IR_MEM_PORT and lower to in/out (or
+               the CPU's equivalent) rather than a load/store to address N.
+               Rewriting here covers every builder that reaches a global —
+               plain read/write, compound assign, ++/-- — from one place.
+               Ports are volatile by nature: each access is observable, so it
+               must survive CSE, store-forwarding and dead-store elision. */
+            if ((o->kind == IR_LD_MEM || o->kind == IR_ST_MEM)
+                && o->mem.kind == IR_MEM_SYM && o->mem.sym
+                && (o->mem.sym->type == KIND_PORT8
+                    || o->mem.sym->type == KIND_PORT16)) {
+                PortInfo *pi = calloc(1, sizeof *pi);
+                pi->kind = (o->mem.sym->type == KIND_PORT16)
+                         ? IR_PORT_KIND_16 : IR_PORT_KIND_8;
+                pi->sym       = o->mem.sym;
+                pi->port_vreg = -1;
+                o->mem.kind      = IR_MEM_PORT;
+                o->mem.port      = pi;
+                o->mem.volatile_ = 1;
+                continue;
+            }
+            if ((o->kind == IR_LD_MEM || o->kind == IR_ST_MEM)
+                && o->mem.kind == IR_MEM_SYM && o->mem.sym
+                && o->mem.sym->ctype
+                && type_or_pointee_volatile(o->mem.sym->ctype))
+                o->mem.volatile_ = 1;
+        }
 
     rc = ir_lower_to_output(f);
     /* ir_lower has no build_fail of its own, so a lowering failure (nonzero

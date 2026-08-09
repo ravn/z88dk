@@ -124,6 +124,23 @@ typedef enum {
                                         TOP frame offset (where the push lands, just below
                                         the return address / saved IX); emit_prologue pushes
                                         instead of storing. Opt-in IR_AUTOPUSH_PARAM. */
+    IR_VREG_DEAD_SPILL     = 1 << 10, /* [IR_DEADSTORE] spill written but NEVER read
+                                        (reads==0, coalescing-checked in rec_end):
+                                        value rides its register to every use. Store
+                                        functions SKIP the slot store (+cache the reg);
+                                        ir_assign_slots drops its slot → frame shrinks →
+                                        deadframe frameless. Set on the re-lower once
+                                        the read/write split proves it dead. */
+    IR_VREG_CALL_SPLIT     = 1 << 11, /* [IR_CALLSPLIT] call-bounded live-range split:
+                                        a spilled reused word value made BC-resident
+                                        (vreg_to_phys=IR_PR_BC) only inside a call-free
+                                        span [home_lo,home_hi] with >=3 reads and NO
+                                        in-span write, spilled (slot-homed) elsewhere.
+                                        Read-only-in-span so the slot stays coherent
+                                        by construction: BC is an opportunistic cache
+                                        (entry reload via emit_bc_reload on a cold
+                                        belief), no exit spill. ir_assign_slots keeps
+                                        its slot despite the PR_BC home. */
 } VRegFlags;
 
 typedef struct {
@@ -551,6 +568,15 @@ typedef struct {
     int         line;
 } Op;
 
+/* Phantom zero-trip guard: a BR_ZERO whose tested counter is a proven NONZERO
+   compile-time constant (constant-bound `for`), so it can never branch. Stored
+   in the otherwise-unused op->imm. Kept in the IR — every CFG/liveness/alloc
+   pass treats it as an ordinary BR_ZERO, so the pre-header→exit edge stays
+   visible and the loop's register allocation is unchanged (conservative,
+   analysis-only edge) — but the lowerer (gen_br_zero) emits NO code for it,
+   dropping the dead `ld a,h; or l; jp z`. Set in AST_LOOP_COUNTDOWN. */
+#define IR_BRZ_PHANTOM 1
+
 /* ----- Basic block ------------------------------------------------------ */
 
 typedef struct {
@@ -620,6 +646,14 @@ typedef struct {
        (IY callee-saved). */
     int        idx3_reg;
 
+    /* [#13] Set by ir_lower_func_flip when this function was FLIPPED from fp to
+       sp inside an otherwise-fp binary. sp-mode uses IX (idx2) / IY (idx3) as
+       scratch, but the fp CALLERS treat them as callee-saved (IX = frame ptr,
+       IY = fp's idx2). So a flipped fn that homes a value in IX/IY must push/pop
+       it on entry/exit (emit_prologue) and shift its sp-relative param/frame
+       offsets accordingly (param_caller_off) — else it trashes the caller. */
+    int        flipped_from_fp;
+
     /* exx/alt-bank home for a loop-INVARIANT word (IR_PR_BC_ALT), or
        IR_PR_NONE. Stamped by ir_build from ir_exx_reg(). Read-only in-loop so it
        persists across `exx`; the compare bridges through A. Frees an index
@@ -647,6 +681,16 @@ typedef struct {
        DE-clean; distinct from the word-accumulate semantics. Reverts to slot if
        no DE-clean region forms. See LOOP_REGALLOC_PLAN.md. */
     int        de_home_is_ptr;
+
+    /* Operand-residency fold hint (opt-in IR_RANGED, DENSITY_HANDOVER §4):
+       a per-vreg flag on a reused deref/binop RESULT that stayed IR_PR_SPILL.
+       Its def path leaves a DE CACHE copy (`ld d,h; ld e,l` + cache_de) so a
+       later in-range read prefers DE (sbc hl,de / e-d byte-wise, DE-clean)
+       instead of re-materialising in HL and spilling. The value stays SPILL
+       (slot always coherent) → a DE clobber falls back to the slot; the hint
+       is byte-safe by construction (worst case = a wasted `ld d,h; ld e,l`).
+       NULL if not built. */
+    unsigned char *de_fold_hint;   /* by vreg id */
 
     /* Home residency region (ADR 0017 step 3b): the validated BB-id span
        [home_region_lo, home_region_hi] over which the DE/byte home stays
@@ -732,6 +776,10 @@ typedef struct {
 /* ----- Constructors / destructors --------------------------------------- */
 
 Func *ir_func_new(SYMBOL *fn);
+/* Deep clone of the pre-backend IR (see ir.c). Lower the clone from scratch in
+   a chosen frame mode without mutating the original; reusable for inlining. */
+Func *ir_clone_func(const Func *s);
+void  ir_free_cloned_func(Func *d);
 void  ir_func_free(Func *f);
 
 int   ir_vreg_new(Func *f, Kind k, SYMBOL *sym, uint8_t flags);

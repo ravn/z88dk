@@ -1076,6 +1076,10 @@ static int ivsr_try_lftr(Func *f, int lo, int hi, int ph,
     int cmp_bb = ib, cmp_idx = ii;
     Op *cmp = &f->bbs[cmp_bb].ops[cmp_idx];
     if (cmp->kind != IR_CMP_LT && cmp->kind != IR_CMP_ULT) return 0;
+    /* Original signedness of the exit test, captured before the rewrite to the
+       unsigned pointer compare below. An UNSIGNED bound is provably >= 0, so the
+       variable-bound max(0,n) clamp is dead — p_end = base + n*scale directly. */
+    int cmp_is_unsigned = (cmp->kind == IR_CMP_ULT);
     int iv = cmp->src[0];
     int c = -1;
     for (int t = 0; t < n_cand; t++)
@@ -1153,24 +1157,34 @@ static int ivsr_try_lftr(Func *f, int lo, int hi, int ph,
         else { ivsr_init_op(&o, IR_ADD); o.dst = pend; o.src[0] = base; o.imm = end_off; }
         licm_insert_before_terminator(&f->bbs[ph], &o);
     } else {
-        /* neff = max(0, n), branchlessly and with only reliable ops (80cc has
-           no arithmetic >> — IR_SHR is logical, #289 — and a standalone
-           compare-to-value mis-lowers here):
-             sb   = (unsigned)n >> 15   (0 if n>=0, 1 if n<0)   [logical shift]
-             mask = sb - 1              (0xFFFF if n>=0, 0 if n<0)
-             neff = n & mask            (n if n>=0, 0 if n<0) */
-        ivsr_init_op(&o, IR_SHR); o.dst = v_b; o.src[0] = bound_v; o.imm = 15;
-        licm_insert_before_terminator(&f->bbs[ph], &o);
-        ivsr_init_op(&o, IR_SUB); o.dst = v_m; o.src[0] = v_b; o.imm = 1;
-        licm_insert_before_terminator(&f->bbs[ph], &o);
-        ivsr_init_op(&o, IR_AND); o.dst = v_neff; o.src[0] = bound_v; o.src[1] = v_m;
-        licm_insert_before_terminator(&f->bbs[ph], &o);
-        if (sh > 0) {
-            ivsr_init_op(&o, IR_SHL); o.dst = v_scaled; o.src[0] = v_neff; o.imm = sh;
+        /* neff = the effective (clamped) bound. For a SIGNED bound, n may be
+           negative and the unsigned pointer compare would run a 0-trip loop as a
+           huge wrapped one, so clamp to max(0, n). For an UNSIGNED bound n >= 0
+           already, so neff = n directly — the clamp (SHR;SUB;AND, ~18B) is dead. */
+        int neff = bound_v;
+        if (!cmp_is_unsigned) {
+            /* max(0, n), branchlessly with only reliable ops (80cc has no
+               arithmetic >> — IR_SHR is logical, #289 — and a standalone
+               compare-to-value mis-lowers here):
+                 sb   = (unsigned)n >> 15   (0 if n>=0, 1 if n<0)   [logical shift]
+                 mask = sb - 1              (0xFFFF if n>=0, 0 if n<0)
+                 neff = n & mask            (n if n>=0, 0 if n<0) */
+            ivsr_init_op(&o, IR_SHR); o.dst = v_b; o.src[0] = bound_v; o.imm = 15;
             licm_insert_before_terminator(&f->bbs[ph], &o);
+            ivsr_init_op(&o, IR_SUB); o.dst = v_m; o.src[0] = v_b; o.imm = 1;
+            licm_insert_before_terminator(&f->bbs[ph], &o);
+            ivsr_init_op(&o, IR_AND); o.dst = v_neff; o.src[0] = bound_v; o.src[1] = v_m;
+            licm_insert_before_terminator(&f->bbs[ph], &o);
+            neff = v_neff;
+        }
+        int v_sc = neff;
+        if (sh > 0) {
+            ivsr_init_op(&o, IR_SHL); o.dst = v_scaled; o.src[0] = neff; o.imm = sh;
+            licm_insert_before_terminator(&f->bbs[ph], &o);
+            v_sc = v_scaled;
         }
         /* p_end = base + neff*scale. */
-        ivsr_init_op(&o, IR_ADD); o.dst = pend; o.src[0] = base; o.src[1] = v_scaled;
+        ivsr_init_op(&o, IR_ADD); o.dst = pend; o.src[0] = base; o.src[1] = v_sc;
         licm_insert_before_terminator(&f->bbs[ph], &o);
     }
     return 1;
@@ -1220,29 +1234,29 @@ static int ivsr_process_loop(Func *f, int h, int latch, int ph)
                    and must stay resident anyway — a stepped pointer is a SECOND
                    loop-carried value competing for the one BC home. It loses,
                    spills to a slot, and the per-iteration slot RMW costs more
-                   than recomputing `base + iv*scale` from the resident index
-                   (queenbench's `safe`). Suppress here.
+                   than recomputing `base + iv*scale` from the resident index.
+                   Suppress here.
                    Detect "survives LFTR": after this reduction removes iv's use
                    in the address derivation (the SHL, or the ADD when scale==1),
                    iv still has >2 in-loop uses (LFTR needs exactly 2 = step +
-                   exit test). A pure array-walk (ptrbench) has exactly 2 left →
+                   exit test). A pure array-walk has exactly 2 left →
                    not suppressed, IVSR still fires. IR_NO_IVSR_SUPPRESS opts out.
                    Gated to z80/z80n/z180 — the CPUs where a slot-homed pointer's
                    `ld hl,(ix+d)` is 2 ops, so maintaining a spilled pointer costs
                    more than recomputing. ez80/kc160/rabbit have a 1-op word slot
                    load (+ native indexing), so the walking pointer stays cheaper
-                   there (measured: ez80 +8% if suppressed) — leave IVSR on. */
+                   there — leave IVSR on. */
                 if (!opt_disabled("ivsr-suppress")
                     && (c_cpu == CPU_Z80 || IS_Z80N() || c_cpu == CPU_Z180)
                     && (scale & (scale - 1)) == 0    /* power-of-2 scale only */
                     && ivsr_base_is_const_sym(f, base, lo, hi)) {
                     /* Power-of-2 scale: recomputing `base + iv*2^k` from the
                        resident index is cheap (`add hl,hl`), so a walking pointer
-                       is a redundant 2nd loop-carried value — suppress it (queen).
+                       is a redundant 2nd loop-carried value — suppress it.
                        A NON-power-of-2 scale (struct-array stride, e.g. i*6) has
                        an expensive multi-op recompute THROUGH DE, which also
                        blocks a DE-resident accumulator; there the walking pointer
-                       is the win (structbench -32%), so this gate is skipped. */
+                       is the win, so this gate is skipped. */
                     int addr_uses = ivsr_uses_in_op(&f->bbs[b].ops[j], iv);
                     if (sb >= 0)
                         addr_uses += ivsr_uses_in_op(&f->bbs[sb].ops[si], iv);
@@ -1327,10 +1341,10 @@ int ir_opt_ivsr(Func *f)
        allocator's PR_BC envelope is function-wide and barred by any
        width-4 vreg (long ops stage through BC) or BC-clobbering op
        (non-char IR_SWITCH, IR_ASM). Mirror that gate here so IVSR fires only
-       where BC residency is reachable — md5 (full of UINT4) would otherwise
-       regress 13%. (Offset stores USED to bar it too — `ld bc,N; add hl,bc`
-       for the offset add — but gen_st_mem now emits that BC-clean, so an
-       array-of-struct write no longer blocks the walking pointer.) */
+       where BC residency is reachable — a width-4-heavy function would
+       otherwise regress. (Offset stores USED to bar it too — `ld bc,N; add
+       hl,bc` for the offset add — but gen_st_mem now emits that BC-clean, so
+       an array-of-struct write no longer blocks the walking pointer.) */
     for (int v = 0; v < f->n_vregs; v++)
         if (f->vregs[v].width == 4) return 0;
     for (int b = 0; b < f->n_bbs; b++) {
@@ -1721,11 +1735,84 @@ static int dce_pure_kind(const Op *op)
     }
 }
 
+/* ---- Dead DEFS (per-BB) --------------------------------------------------
+   ir_opt_dce below is a per-VREG use count: it drops a def only when the vreg
+   is never used ANYWHERE. That cannot see a redundant def, because 80cc maps
+   one local to one vreg — a reassigned local keeps the same vreg, so an earlier
+   def stays "used" on account of a later read of the LATER def.
+
+   The classic producer is a short delegating function: `int r = 0; r += f();`.
+   const-fold rewrites `0 + f()` to a direct define of r by the CALL (which is
+   what lets the frame disappear) but leaves the `LD_IMM r <- 0` stranded, and
+   DCE keeps it because r is still read by the return/next call.
+
+   Removing it is sound WITHIN A BB with no dataflow: if a def's vreg is
+   redefined later in the same BB with no read in between, every later reader
+   sees the second def, and the first def already killed whatever preceded it —
+   so no path can observe the first. Cross-BB cases need real liveness and are
+   deliberately not attempted here.
+
+   Excludes address-taken/volatile vregs (memory may be observed elsewhere) and
+   reuses dce_pure_kind so an op with side effects is never dropped — a CALL
+   defining a dead dst still has to run. `--opt-disable=dead-def` opts out. */
+static int ir_opt_dead_defs(Func *f)
+{
+    if (opt_disabled("dead-def")) return 0;
+    int removed = 0;
+    for (int b = 0; b < f->n_bbs; b++) {
+        BB *bb = &f->bbs[b];
+        int new_n = 0;
+        for (int j = 0; j < bb->n_ops; j++) {
+            Op *op = &bb->ops[j];
+            int d = op->dst, dead = 0;
+            if (d >= 0 && d < f->n_vregs && dce_pure_kind(op)
+                && !(f->vregs[d].flags & (IR_VREG_ADDR_TAKEN | IR_VREG_VOLATILE))) {
+                for (int k = j + 1; k < bb->n_ops; k++) {
+                    /* A BB here can hold a MID-BLOCK conditional branch (the
+                       `BR_COND …; BR …` tail), so a later op is NOT guaranteed
+                       to execute: control may leave first and a successor read
+                       the value. Stop at any control transfer — without this,
+                       umaxd's loop lost an IR_INC whose value the next block
+                       consumed on the taken path. */
+                    switch (bb->ops[k].kind) {
+                    case IR_BR: case IR_BR_COND: case IR_BR_ZERO:
+                    case IR_SWITCH: case IR_RET:
+                    case IR_DEREF_CMP_BR: case IR_COPY_STEP_BRZ:
+                        k = bb->n_ops; continue;      /* end the scan */
+                    default: break;
+                    }
+                    int uses[16];
+                    int nu = ir_op_uses(&bb->ops[k], uses, 16), read = 0;
+                    for (int u = 0; u < nu && u < 16; u++)
+                        if (uses[u] == d) { read = 1; break; }
+                    if (read) break;                  /* observed — keep */
+                    int defs[8];
+                    int nd = ir_op_defs(&bb->ops[k], defs, 8), redef = 0;
+                    for (int x = 0; x < nd; x++)
+                        if (defs[x] == d) { redef = 1; break; }
+                    if (redef) { dead = 1; break; }   /* killed unread */
+                }
+            }
+            if (dead) {
+                if (getenv("IR_DEADDEF_LOG"))
+                    fprintf(stderr, "IR_DEADDEF: %s bb%d op%d kind=%d dst=v%d "
+                            "w=%d REMOVED\n", f->fn ? ir_sym_name(f->fn) : "?",
+                            b, j, (int)op->kind, d, f->vregs[d].width);
+                removed++; continue;
+            }
+            if (new_n != j) bb->ops[new_n] = bb->ops[j];
+            new_n++;
+        }
+        bb->n_ops = new_n;
+    }
+    return removed;
+}
+
 int ir_opt_dce(Func *f)
 {
     if (!f) return 0;
     if (opt_disabled("dce")) return 0;
-    int removed = 0;
+    int removed = ir_opt_dead_defs(f);
     int pass_changed;
     do {
         pass_changed = 0;
@@ -2499,8 +2586,19 @@ int ir_opt_const_fold(Func *f)
     if (nv <= 0) return 0;
     int8_t  *known = calloc((size_t)nv, 1);
     int64_t *val   = calloc((size_t)nv, sizeof(int64_t));
-    if (!known || !val) { free(known); free(val); return 0; }
+    int     *usecnt = calloc((size_t)nv, sizeof(int));
+    if (!known || !val || !usecnt) { free(known); free(val); free(usecnt); return 0; }
     int changed = 0;
+    /* Function-wide use counts — gate the const-widen rewrite (below) to
+       SINGLE-USE sources so it only fires when it makes the source constant
+       dead (strictly a win); rewriting a multi-use source just duplicates the
+       constant and perturbs allocation (queenbench-fp +2). */
+    for (int b = 0; b < f->n_bbs; b++)
+        for (int j = 0; j < f->bbs[b].n_ops; j++) {
+            int u[16]; int nu = ir_op_uses(&f->bbs[b].ops[j], u, 16);
+            for (int t = 0; t < nu; t++)
+                if (u[t] >= 0 && u[t] < nv) usecnt[u[t]]++;
+        }
 
     for (int b = 0; b < f->n_bbs; b++) {
         BB *bb = &f->bbs[b];
@@ -2620,16 +2718,35 @@ int ir_opt_const_fold(Func *f)
                 if (op->kind == IR_LD_IMM) {
                     known[d] = 1;
                     val[d] = have_mask ? (op->imm & mask) : op->imm;
-                } else if (op->kind == IR_MOV && op->src[0] >= 0
-                           && op->src[0] < nv && known[op->src[0]]) {
-                    known[d] = 1; val[d] = val[op->src[0]];
-                } else if (op->kind == IR_CONV_TRUNC && op->src[0] >= 0
-                           && op->src[0] < nv && known[op->src[0]]) {
-                    /* Narrowing a known constant stays constant (masked to the
-                       dst width) — lets a `(unsigned char)K` store fold to an
-                       immediate (sieve's flags[k]=1). */
-                    known[d] = 1;
-                    val[d] = have_mask ? (val[op->src[0]] & mask) : val[op->src[0]];
+                } else if (op->src[0] >= 0 && op->src[0] < nv
+                           && known[op->src[0]] && usecnt[op->src[0]] == 1
+                           && (op->kind == IR_CONV_ZX || op->kind == IR_CONV_SX
+                               || op->kind == IR_CONV_TRUNC
+                               || (op->kind == IR_MOV
+                                   && f->vregs[op->src[0]].width != w))) {
+                    /* [const-widen] A WIDTH-CHANGING copy/cast of a known constant
+                       is itself that constant (ZX = the value; TRUNC/dst-mask
+                       narrows; SX sign-extends from the source width; a width-
+                       changing MOV is the frontend's widen). REWRITE to a direct
+                       LD_IMM so the def lowers as `ld rr,K` and the source
+                       constant, if now unused, is DCE'd — kills the
+                       `ld a,K; ld l,a; ld h,0` byte-materialise-then-widen of a
+                       small constant loop bound (& friends). SAME-width const MOVs
+                       are left to copy-prop: rewriting them perturbs allocation
+                       (structbench-sp +12) for no materialise saving. */
+                    int64_t sv = val[op->src[0]];
+                    if (op->kind == IR_CONV_SX) {
+                        switch (f->vregs[op->src[0]].width) {
+                        case 1: sv = (int64_t)(int8_t)sv;  break;
+                        case 2: sv = (int64_t)(int16_t)sv; break;
+                        case 4: sv = (int64_t)(int32_t)sv; break;
+                        }
+                    }
+                    sv = have_mask ? (sv & mask) : sv;
+                    op->kind = IR_LD_IMM; op->imm = sv;
+                    op->src[0] = -1; op->src[1] = -1;
+                    changed++;
+                    known[d] = 1; val[d] = sv;
                 } else {
                     known[d] = 0;
                 }
@@ -2637,7 +2754,7 @@ int ir_opt_const_fold(Func *f)
             #undef KCONST
         }
     }
-    free(known); free(val);
+    free(known); free(val); free(usecnt);
     return changed;
 }
 

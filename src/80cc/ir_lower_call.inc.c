@@ -1,21 +1,8 @@
 /* ir_lower_call.inc.c — part of ir_lower.c, #included (single TU). Do not compile standalone. */
 
-/* After store_hl() of a used word CALL result (store_hl leaves the value in DE,
-   HL=junk): in fp mode restore HL and cache it, so consumers read HL directly
-   rather than reloading the slot / oscillating DE<->HL. store_hl's offset-fits
-   path is `ld (ix+d),hl; ex de,hl`, so the recover ex de,hl forms an adjacent
-   pair that copt (#284) cancels — the store keeps HL and the recover is free.
-   In sp mode store_hl's paths don't reliably end in ex de,hl (TOS push, byte
-   walk), so leave the value in DE (cache_de) as before. */
-static void store_call_result_recover(FILE *out, const Func *f, int vreg)
-{
-    if (fp_active(f)) {
-        emit(out, "ex\tde,hl");
-        cache_hl(vreg);
-    } else {
-        cache_de(vreg);
-    }
-}
+/* (store_call_result_recover retired: word CALL results now use
+   store_hl_keep_hl, which leaves the value in HL directly — no store_hl DE
+   round-trip + recover ex de,hl to undo.) */
 
 static int gen_call(FILE *out, Func *f, const Op *op)
 {
@@ -98,7 +85,8 @@ static int gen_call(FILE *out, Func *f, const Op *op)
            across this call), so they add no BC-save — Part 1. */
         for (int i = 0; i < f->n_vregs; i++) {
             if (f->vreg_to_phys[i] == IR_PR_BC
-                && !(f->vregs[i].flags & IR_VREG_BC_PACK)) { bc_saved = 1; break; }
+                && !(f->vregs[i].flags & (IR_VREG_BC_PACK | IR_VREG_CALL_SPLIT)))
+                { bc_saved = 1; break; }
         }
     }
     if (bc_saved) {
@@ -136,8 +124,6 @@ static int gen_call(FILE *out, Func *f, const Op *op)
     }
     for (int k = 0; k < n_to_push; k++) {
         int i = start + k * push_step;
-        int slot = slot_off(f, ci->args[i]);
-        int adj  = slot + pushed_bytes + sp_adj_extra + L.cur_sp_adjust;
         int width = f->vregs[ci->args[i]].width;
         if (width > 4) {
             /* Wide double arg: load slot into acc and push — combined (dldpsh)
@@ -186,9 +172,11 @@ static int gen_call(FILE *out, Func *f, const Op *op)
             emit(out, "inc\tsp");
             pushed_bytes += 1;
         } else if (width == 1) {
-            emit(out, "ld\thl,%d", adj);
-            emit(out, "add\thl,sp");
-            emit(out, "ld\ta,(hl)");
+            /* Byte arg pushed as a word. Read the byte via push_arg_byte_to_a so
+               fp mode uses `ld a,(ix+d)` (3 B, no HL clobber) instead of the
+               sp-relative `ld hl,adj; add hl,sp; ld a,(hl)` (an ix frame slot is
+               fixed across the arg pushes; the sp form is only needed frameless). */
+            push_arg_byte_to_a(out, f, ci->args[i], pushed_bytes + sp_adj_extra);
             emit(out, "ld\tl,a");
             emit(out, "ld\th,0");
             emit(out, "push\thl");
@@ -270,14 +258,19 @@ static int gen_call(FILE *out, Func *f, const Op *op)
         } else if (width == 4) {
             load_to_dehl_adj(out, f, ci->args[last], adj);
         } else if (width == 1 && adj == 0) {
-            /* Byte fastcall arg: the callee reads its byte param from L only
-               (the h-half is dead — sccz80 over-promotes it with a caller-side
-               `ld h,0`). Load just the low byte, skipping the zero-extend.
-               Restricted to adj==0 so load_byte_to_a's own sp/cur_sp_adjust
-               accounting is exact — a nonzero push adjustment would need the
-               width-2 adj path, so fall through to it. */
+            /* Byte fastcall arg. Load the low byte via load_byte_to_a (fp/
+               A-cache aware) then zero-extend H: the callee's declared param
+               may be WIDER than this byte value — a char passed to
+               `int toupper_fastcall(int)` is read as the full HL (its range
+               check reads H), so H must be defined. A genuine 1-byte-param
+               callee ignores H (the ld h,0 is then dead but harmless); this
+               matches the stacked byte-arg path and sccz80's caller-side
+               over-promotion. adj==0 keeps load_byte_to_a's sp accounting
+               exact; a nonzero push adjustment falls through to the word path
+               (load_to_hl_adj, which widens H itself). */
             load_byte_to_a(out, f, ci->args[last]);
             emit(out, "ld\tl,a");
+            emit(out, "ld\th,0");
         } else {
             load_to_hl_adj(out, f, ci->args[last], adj);
         }
@@ -483,8 +476,8 @@ static int gen_call(FILE *out, Func *f, const Op *op)
                 if (L.la.cur_dst_dead || vreg_in_register_pool(f, ci->ret_vreg))
                     cache_hl(ci->ret_vreg);   /* dead/reg-pool: keep in HL, no spill */
                 else {
-                    store_hl(out, f, ci->ret_vreg);
-                    store_call_result_recover(out, f, ci->ret_vreg);
+                    if (store_hl_keep_hl(out, f, ci->ret_vreg)) cache_hl(ci->ret_vreg);
+                    else                                        cache_de(ci->ret_vreg);
                 }
             }
         } else if (ret_w > 4) {
@@ -510,16 +503,36 @@ static int gen_call(FILE *out, Func *f, const Op *op)
                callee). store_hl writes 2 bytes and would overrun a 1-byte
                slot, so store the low byte via A. */
             emit(out, "ld\ta,l");
-            if (L.la.cur_dst_dead || vreg_in_register_pool(f, ci->ret_vreg))
+            if (L.la.cur_dst_dead || vreg_in_register_pool(f, ci->ret_vreg)) {
                 cache_a(ci->ret_vreg);
-            else
+                /* Byte index-half home (IYL/IYH…) survives the call but is NOT
+                   kept live by the A belief across a BB edge — a later block
+                   reads the value straight from the half. Physically commit
+                   A -> the half now (mirrors store_a_byte's idx-half path; A
+                   stays cached so same-BB reads still elide). */
+                PhysReg ih;
+                if (!L.la.cur_dst_dead
+                    && (ih = idxhalf_phys(f, ci->ret_vreg)) != IR_PR_NONE)
+                    emit(out, "ld\t%s,a", idxhalf_reg(ih));
+            } else
                 store_a_byte(out, f, ci->ret_vreg);
         } else {                           /* width 2, result in HL */
-            if (L.la.cur_dst_dead || vreg_in_register_pool(f, ci->ret_vreg))
+            if (L.la.cur_dst_dead || vreg_in_register_pool(f, ci->ret_vreg)) {
                 cache_hl(ci->ret_vreg);    /* dead/reg-pool: keep in HL, no spill */
-            else {
-                store_hl(out, f, ci->ret_vreg);
-                store_call_result_recover(out, f, ci->ret_vreg);
+                /* An index-register home (idx2/idx3 = IX/IY) survives the call
+                   but is NOT kept live by the HL belief — that belief dies at
+                   the BB boundary, and a later block reads the value straight
+                   from IX/IY. Physically commit HL -> the index home now
+                   (push hl;pop <idx> preserves HL, so the cache_hl above stays
+                   valid). Without this the call result never reaches the home
+                   across a block edge (a call result homed in an index reg and
+                   read by a later BB). */
+                if (!L.la.cur_dst_dead
+                    && vreg_idx_home(f, ci->ret_vreg) != IR_PR_NONE)
+                    emit_hl_to_idx_word(out, f, ci->ret_vreg);
+            } else {
+                if (store_hl_keep_hl(out, f, ci->ret_vreg)) cache_hl(ci->ret_vreg);
+                else                                        cache_de(ci->ret_vreg);
             }
         }
     }
@@ -833,7 +846,8 @@ static int gen_hcall(FILE *out, Func *f, const Op *op)
     int hc_bc_saved = 0;
     for (int i = 0; i < f->n_vregs; i++) {
         if (f->vreg_to_phys[i] == IR_PR_BC
-            && !(f->vregs[i].flags & IR_VREG_BC_PACK)) { hc_bc_saved = 1; break; }
+            && !(f->vregs[i].flags & (IR_VREG_BC_PACK | IR_VREG_CALL_SPLIT)))
+            { hc_bc_saved = 1; break; }
     }
     if (hc_bc_saved) {
         emit_sp(out, 2, "push\tbc");
@@ -865,6 +879,28 @@ static int gen_hcall(FILE *out, Func *f, const Op *op)
             L.cur_sp_adjust += 4;
             popped_bytes += 4;
         } else {
+            /* Loading this stacked arg into HL destroys whatever HL holds. If
+               that is a LATER operand — stacked OR the register operand at
+               args[n_stacked] — the repair is a slot reload, so a value that
+               never otherwise needed memory acquires a slot purely to survive
+               its own argument marshalling. Stash it in DE (free here) and let
+               the DE->HL recovery in load_to_hl serve it in turn.
+
+               libsrc tanf16, `sinf16(x)/cosf16(x)`: l_f16_div takes args[0]
+               stacked and args[1] in HL, and the cosf16 result IS args[1],
+               sitting in HL when args[0] is loaded. Scan to n_args, not to
+               n_stacked — the endangered operand is usually the register one. */
+            if (L.rs.hl >= 0 && L.rs.hl != v && L.rs.de < 0
+                && L.rs.hl < f->n_vregs && f->vregs[L.rs.hl].width == 2) {
+                for (int j = i + 1; j < hi->n_args; j++)
+                    if (hi->args[j] == L.rs.hl) {
+                        int keep = L.rs.hl;
+                        emit(out, "ld\te,l");
+                        emit(out, "ld\td,h");
+                        cache_de(keep);
+                        break;
+                    }
+            }
             load_to_hl(out, f, v);
             emit_sp(out, 2, "push\thl");
             popped_bytes += 2;

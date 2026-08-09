@@ -48,13 +48,8 @@
 
 DOUBLE eval_A(int i, int j)
 {
-#ifdef __MATH_MATH16
-    return invf16((DOUBLE)((i+j)*(i+j+1)/2+i+1));
-#elif defined(__MATH_MATH32)
-    return inv((i+j)*(i+j+1)/2+i+1);
-#else
-    return 1.0/((i+j)*(i+j+1)/2+i+1);
-#endif
+    /* Cast so sccz80 uses f16 under --math16; bare 1.0 is f48 (ddiv). */
+    return (DOUBLE)1.0/(DOUBLE)((i+j)*(i+j+1)/2+i+1);
 }
 
 void eval_A_times_u(const DOUBLE u[], DOUBLE Au[])
