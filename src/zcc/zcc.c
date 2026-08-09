@@ -392,6 +392,19 @@ static char  *c_llvmz80_postproc = NULL;
  * unreferenced module, so an integer-only program that never touches a double
  * pays exactly zero bytes for it. */
 static char  *c_llvmz80_rtlib = NULL;
+/* -compiler=llvmz80 f32 math bridge archive: the thin compiler-rt-named
+ * (__addsf3/__subsf3/__mulsf3/__divsf3, __cmpsf2/__gtsf2/__gesf2/__unordsf2,
+ * __fixsfsi/__fixunssfsi/__floatsisf/__floatunsisf) shims that alias z88dk's
+ * math32 (IEEE-754 binary32) cores.  Since `double`==`float`==binary32 on this
+ * target (float32-math32, ravn/llvm-z80#277) clang emits exactly this family of
+ * 32-bit `sf` libcalls; math32 itself (selected with --math32) supplies the
+ * cores, and this bridge maps the compiler-rt names to them.  It lives INSIDE
+ * z88dk (unlike the f64 rtlib above), so it has a DESTDIR default and is
+ * auto-linked for every -compiler=llvmz80 program: it is a .lib ARCHIVE, so an
+ * integer-only program that never touches a float pays exactly zero bytes, and
+ * the bridge modules only reference math32's cm32_ and m32_compare when actually
+ * pulled in -- i.e. only when the user also passed --math32.  ravn/z88dk#44. */
+static char  *c_llvmz80_fmath = NULL;
 static char  *c_80cc_opt = NULL;
 static char  *c_xcc_opt = NULL;
 static char  *c_sdccopt1 = NULL;
@@ -473,6 +486,7 @@ static arg_t  config[] = {
     { "LLVMZ80RULES", 0, SetStringConfig, &c_llvmz80_opt, NULL, "copt rules for ravn/llvm-z80 clang", "DESTDIR/lib/llvmz80/llvmz80_rules.1"},
     { "LLVMZ80POSTPROC", 0, SetStringConfig, &c_llvmz80_postproc, NULL, "Post-copt bridge script for ravn/llvm-z80 clang", "DESTDIR/lib/llvmz80/bridge_postproc.sh"},
     { "LLVMZ80RTLIB", 0, SetStringConfig, &c_llvmz80_rtlib, NULL, "f64 soft-float runtime archive for ravn/llvm-z80 clang (full path, no .lib suffix; ships with the clang binary)", NULL},
+    { "LLVMZ80FMATH", 0, SetStringConfig, &c_llvmz80_fmath, NULL, "f32 math32 bridge archive for ravn/llvm-z80 clang (full path, no .lib suffix)", "DESTDIR/libsrc/l/llvmz80/llvmz80_fmath"},
     { "80CCRULES", 0, SetStringConfig, &c_80cc_opt, NULL, "Options for 80cc", "DESTDIR/lib/80cc_rules.1"},
     { "XCCRULES", 0, SetStringConfig, &c_xcc_opt, NULL, "Options for xcc", "DESTDIR/lib/xcc_rules.1"},
     { "SDCCOPT1", 0, SetStringConfig, &c_sdccopt1, NULL, "", "\"DESTDIR/lib/sdcc/sdcc_opt.1\"" },
@@ -1259,6 +1273,21 @@ int main(int argc, char **argv)
         zcc_asprintf(&rtarg, "-l\"%s\"", c_llvmz80_rtlib);
         BuildOptions(&linklibs, rtarg);
         free(rtarg);
+    }
+
+    /* -compiler=llvmz80: auto-link the f32 math32 bridge archive so float/double
+     * programs resolve __addsf3/__cmpsf2/__fixsfsi/... against math32 with no
+     * explicit -lllvmz80_fmath.  Same archive-discard logic as the f64 rtlib
+     * above (integer-only programs pay zero bytes); unlike the rtlib it lives in
+     * z88dk and has a DESTDIR default, so it is on by default.  The bridge only
+     * pulls math32's cm32_ and m32_compare cores when a float libcall is actually
+     * referenced, i.e. when the user also passed --math32.  ravn/z88dk#44. */
+    if (compiler_type == CC_LLVMZ80 && !compileonly && !makelib &&
+        c_llvmz80_fmath && *c_llvmz80_fmath) {
+        char *fmarg;
+        zcc_asprintf(&fmarg, "-l\"%s\"", c_llvmz80_fmath);
+        BuildOptions(&linklibs, fmarg);
+        free(fmarg);
     }
 
     if (printmacros)
@@ -3617,6 +3646,14 @@ static void configure_compiler(void)
             char *env_rtlib = getenv("LLVMZ80RTLIB");
             if (env_rtlib && *env_rtlib)
                 c_llvmz80_rtlib = env_rtlib;
+        }
+        /* Same env-over-config override for the f32 math32 bridge archive (see
+         * c_llvmz80_fmath) so a locally rebuilt bridge can be selected without
+         * editing the config file. */
+        {
+            char *env_fmath = getenv("LLVMZ80FMATH");
+            if (env_fmath && *env_fmath)
+                c_llvmz80_fmath = env_fmath;
         }
 
         compiler_type = CC_LLVMZ80;

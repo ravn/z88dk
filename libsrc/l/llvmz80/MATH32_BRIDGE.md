@@ -261,6 +261,28 @@ order-sensitive sub/div cases), `runtime_fcmp.c`/`.sh` (all six
 ordered/unordered predicates, several NaN cases), `runtime_fconv.c`/`.sh`
 (boundary values incl. 0, negative, INT16_MIN/MAX).
 
+### 4a. Packaging + auto-link (`llvmz80_fmath.lib`, ravn/z88dk#44)
+
+The three bridge sources are assembled into an archive `llvmz80_fmath.lib`
+(reproducible via `build_fmath_lib.sh`, committed with `git add -f` like the
+sibling `newlib/*.lib`). `zcc` **auto-links** it for every `-compiler=llvmz80`
+program — config var `LLVMZ80FMATH`, default
+`DESTDIR/libsrc/l/llvmz80/llvmz80_fmath` (env override respected). Because it is
+an ARCHIVE the linker discards every unreferenced module, so an integer-only
+program pays zero bytes, and the math32 cores (`cm32_`, `m32_compare`) are only
+pulled when a float libcall is actually referenced — i.e. only when the user
+also passed `--math32`. So a user needs nothing beyond `--math32`; no manual
+`-lllvmz80_fmath`.
+
+This closes the ravn/z88dk#44 **blocker** (the fmath bridge was previously an
+incomplete stub — only `__addsf3`/`__cmpsf2`/`__floatsisf` were built into the
+archive, so `-lllvmz80_fmath` left `__gtsf2`/`__fixsfsi`/… undefined). The full
+family above now links and runs; verified 2026-08-09 end-to-end on
+`z88dk-ticks` with a comprehensive arith+compare+conv program
+(`add=5.50 sub=4.75 mul=7.00 dvd=1.75 neg=-3.50`, `cmp 001101`, `i2=3 u2=3`).
+`--math32` is therefore a complete FP runtime for the llvmz80 lane, which is
+what unblocks retiring the 64-bit `llvmz80-softfloat/` closure.
+
 ## 5. Performance: math32 vs. compiler-rt, all 7 ops (2026-08-01, reproducible)
 
 Earlier benchmarking (`design-2026-07-31-float32-math32-strategy.md` §9)
