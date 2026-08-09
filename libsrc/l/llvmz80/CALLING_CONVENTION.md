@@ -211,13 +211,13 @@ both classic and newlib (`-D__LLVMZ80_IEEE_PRINTF`, ravn/z88dk#35). See the
 
 > **Classic `%f` has two routes** — the `llvmz80-softfloat` nanoprintf closure,
 > AND stock z88dk `printf` + `--math32` (verified 2026-08-05). As of
-> ravn/z88dk#42 the `-compiler=llvmz80` driver auto-scans format strings in
-> `zpragma` (`-autoformat`) and selects the classic converters exactly like
-> sccz80, so an explicit `#pragma printf` is **no longer required** on this lane
-> (it still works and still wins if you want to prune the set by hand). Only
-> `--math32` remains mandatory, to supply the 32-bit-IEEE float core. On the
-> **zsdcc** lane, which has no `-autoformat`, the pragma is still needed. Full
-> recipe + rationale: [`PRINTF_FLOAT.md`](PRINTF_FLOAT.md).
+> ravn/z88dk#42 the driver auto-scans format strings in `zpragma`
+> (`-autoformat`) and selects the classic converters exactly like sccz80 for
+> **both `-compiler=llvmz80` and `-compiler=sdcc` (zsdcc)**, so an explicit
+> `#pragma printf` is **no longer required** on either lane (it still works and
+> still wins if you want to prune the set by hand). Only `--math32` remains
+> mandatory, to supply the 32-bit-IEEE float core. Full recipe + rationale:
+> [`PRINTF_FLOAT.md`](PRINTF_FLOAT.md).
 
 # Variadic stdio return value (printf/sprintf/scanf family) — ravn/z88dk#31 (FIXED)
 
