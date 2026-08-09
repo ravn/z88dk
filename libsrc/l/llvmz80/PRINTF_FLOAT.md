@@ -65,20 +65,27 @@ Requirements:
    call prints literally. The `-autoformat` scan handles this automatically
    (it sets the flags-handling bit on any width/precision).
 
-## Route 2 (nanoprintf closure): `__llvmz80_printf`
+## Route 2 (nanoprintf closure `__llvmz80_printf`) — RETIRED
 
-The `llvmz80-softfloat` project ships an IEEE-from-raw-bits nanoprintf shim
-(`__llvmz80_printf`/`__llvmz80_snprintf`, `build_fmt.sh`) that needs **no**
-float-math lib. Use it when you also need soft-float arithmetic, or want `%f`
-without `--math32`. Note: `%e`/`%g` are a permanent nanoprintf design exception.
+The `llvmz80-softfloat` project shipped an IEEE-from-raw-bits nanoprintf shim
+(`__llvmz80_printf`/`__llvmz80_snprintf`, `build_fmt.sh`). It existed only
+because `double` used to be a 64-bit soft-float closure with no z88dk library to
+lean on. **That premise is gone:** since the float32-math32 merge
+(ravn/llvm-z80#277, 2026-08-05) `double` is 32-bit IEEE-754, and stock `printf`
++ `--math32` (Route 1) prints `%f` correctly with no extra archive and the
+portable `printf` entry point. So the nanoprintf shim is **no longer necessary
+and is retired** (user directive 2026-08-06; ravn/z88dk#43). The whole
+`llvmz80-softfloat/` closure is likewise being retired — full cleanup tracked in
+ravn/z88dk#44 and `[[project_double_is_float32_retire_softfloat]]`. Do not wire
+new code to the `__llvmz80_`-prefixed entry points.
 
 ## Which to use
 
-- Only need `%f` output (no double arithmetic): **Route 1** is simplest — just
-  `--math32` (converters auto-selected; no pragma, no extra archive).
-- Already linking `softfloat_cpm_z80.lib` for double math, or want `%f` without
-  `--math32`: **Route 2**.
+**Route 1 is the single recommended (and only supported) classic `%f` route:**
+just `--math32` (converters auto-selected; no pragma, no extra archive, stock
+`printf` entry point so source is portable with sccz80/zsdcc). Route 2 is
+retired (see above).
 
-Reconciling the two routes into a single recommended entry point is tracked in
-ravn/z88dk#43. Newlib is out of scope (compat-only); see
-`newlib/KNOWN_GAPS.md`.
+Reconciled 2026-08-09 (ravn/z88dk#43): Route 1 verified byte-identical to sccz80
+(`v=   3.5|d=42`) under llvmz80 + `--math32` on z88dk-ticks CP/M. Newlib is out
+of scope (compat-only); see `newlib/KNOWN_GAPS.md`.

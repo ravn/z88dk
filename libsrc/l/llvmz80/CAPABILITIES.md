@@ -62,7 +62,7 @@ zcc +cpm -subtype=rc700 -compiler=llvmz80 -O2 -o prog prog.c
 | **`stdarg.h`** | `__builtin_va_*` in user functions; variadic stdio return value | was ravn/z88dk#31 (stdio ret) + ravn/z88dk#270 (`va_start`/`va_arg`) — FIXED |
 | **Integer libcalls** | `__mulsi3`, `__divsi3`, `__udivsi3`, `__divmodsi4`, `__divhi3`, `__mulhi3`, `__udivqi3`, … | thin `libsrc/l/llvmz80/*.asm` bridges over the classic `l_*` cores |
 | **`double` (soft-float)** | +,-,*,/, compares, `__floatsidf`/`__fixdfsi`/conversions | via `softfloat_cpm_z80.lib` (`LLVMZ80RTLIB`), auto-linked. `(double)int` was #273 — FIXED |
-| **`printf("%f")`** | two routes: nanoprintf closure, OR stock printf + `--math32` (converters auto-selected since #42; `#pragma printf` optional) | see `PRINTF_FLOAT.md`. `%e`/`%g` NOT supported (nanoprintf design). |
+| **`printf("%f")`** | stock `printf` + `--math32` (single route since #43; converters auto-selected since #42, `#pragma printf` optional). nanoprintf closure RETIRED | see `PRINTF_FLOAT.md`. For `%e`/`%g` see row below. |
 | **Port I/O** | `address_space(2)` → `IN A,(n)`/`OUT (n),A` | ravn/llvm-z80 #1/#44 |
 | **Z80 intrinsics/attrs** | `__builtin_z80_di/ei/halt/nop/im2/set_i`; `__attribute__((z80_critical))` | ships `<intrinsic.h>` so the same source compiles under clang AND SDCC |
 
@@ -97,7 +97,7 @@ alias is not wired (ravn/z88dk#18).
 | **`setjmp`/`longjmp`** | newlib | `setjmp` returns nonzero on the initial call (`__SMALLC` ABI mismatch). Open, left visible. **Use classic** — classic `setjmp` PASSES. (`KNOWN_GAPS.md` #3) |
 | **Disk `FILE*` I/O** | newlib | link error `asm_target_open` — CP/M newlib ships no file-open driver, tree-wide. ravn/z88dk#34 WONTFIX. **Use classic.** (`KNOWN_GAPS.md` #1) |
 | **`<math.h>` / libm** | both | `<math.h>` won't compile (`_Float16` reserved keyword); newlib libm uses a non-IEEE float format and won't link. ravn/z88dk#37. clang `double` uses the softfloat closure, not newlib math. (`KNOWN_GAPS.md` #2) |
-| **`printf` `%e` / `%g`** | both | permanent nanoprintf design choice; use `%f`. |
+| **`printf` `%e` / `%g`** | classic | was a nanoprintf design limitation; nanoprintf is now RETIRED (#43). On stock classic `printf` these are separate converters — availability not re-verified this session; `%f` is the verified path. |
 | **POSIX fd-layer** (`open`/`read`/`write`/`close`/`lseek`) | classic `+cpm` | resolve to intentional no-op dummy stubs — the integer-fd layer does not exist on CP/M for **any** compiler. Use the `FILE*` layer. (`write()` returns the byte count correctly — ravn/z88dk#23 fixed.) |
 | **`isqrt` / `unbcd`** | newlib | classic-clib extensions, absent from newlib `_DEVELOPMENT` headers by design. Use classic. |
 | **`double` TPA cost** | both | the soft-float closure is a sizeable archive; budget TPA on 64 KB CP/M. Integer-only programs link byte-identically with or without `LLVMZ80RTLIB` set. |

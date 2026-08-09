@@ -209,14 +209,17 @@ Status: `(double)int` (`__floatsidf`, was ravn/llvm-z80#273) and user
 both classic and newlib (`-D__LLVMZ80_IEEE_PRINTF`, ravn/z88dk#35). See the
 "Known Bugs" list in the workspace `CLAUDE.md` for the current state.
 
-> **Classic `%f` has two routes** — the `llvmz80-softfloat` nanoprintf closure,
-> AND stock z88dk `printf` + `--math32` (verified 2026-08-05). As of
-> ravn/z88dk#42 the driver auto-scans format strings in `zpragma`
-> (`-autoformat`) and selects the classic converters exactly like sccz80 for
-> **both `-compiler=llvmz80` and `-compiler=sdcc` (zsdcc)**, so an explicit
-> `#pragma printf` is **no longer required** on either lane (it still works and
-> still wins if you want to prune the set by hand). Only `--math32` remains
-> mandatory, to supply the 32-bit-IEEE float core. Full recipe + rationale:
+> **Classic `%f` — single route since ravn/z88dk#43** (reconciled 2026-08-09):
+> stock z88dk `printf` + `--math32` (verified byte-identical to sccz80,
+> `v=   3.5|d=42`). As of ravn/z88dk#42 the driver auto-scans format strings in
+> `zpragma` (`-autoformat`) and selects the classic converters exactly like
+> sccz80 for **both `-compiler=llvmz80` and `-compiler=sdcc` (zsdcc)**, so an
+> explicit `#pragma printf` is **no longer required** on either lane (it still
+> works and still wins if you want to prune the set by hand). Only `--math32`
+> remains mandatory, to supply the 32-bit-IEEE float core. The old
+> `llvmz80-softfloat` nanoprintf closure (`__llvmz80_printf`) is **RETIRED** —
+> `double` is 32-bit since ravn/llvm-z80#277 so stock `printf` covers `%f` with
+> the portable entry point. Full recipe + rationale:
 > [`PRINTF_FLOAT.md`](PRINTF_FLOAT.md).
 
 # Variadic stdio return value (printf/sprintf/scanf family) — ravn/z88dk#31 (FIXED)
