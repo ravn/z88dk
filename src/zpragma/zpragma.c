@@ -359,6 +359,14 @@ static char auto_printf_nonlit_file[FILENAME_MAX+1];
 static int  auto_scanf_nonlit_line = 0;
 static char auto_scanf_nonlit_file[FILENAME_MAX+1];
 
+/* #59: set when the user wrote an explicit '#pragma printf'/'#pragma scanf' in
+ * this TU.  That pragma sets CLIB_OPT_PRINTF directly and wins over the
+ * auto-detected CRT_printf_format channel, so the user has already committed to
+ * a converter set -- the non-literal note (which only advises adding such a
+ * pragma) would be pure noise, so it is suppressed for that family. */
+static int  user_printf_pragma = 0;
+static int  user_scanf_pragma = 0;
+
 /* True if word `w` occurs as a whole token anywhere in [s,e).  Used to tell a
  * printf/scanf *prototype* ("int printf(const char *fmt,...)") from a real
  * call: every such prototype declares its format parameter as some form of
@@ -659,10 +667,12 @@ static void emit_auto_format(void)
      * family's converter table is being pruned (auto_*_mask != 0) AND a
      * non-literal format call the scan could not see exists in this TU.  A
      * pure-runtime TU (mask == 0) is skipped: nothing is emitted, so the CRT
-     * keeps the broad default table and the runtime format is safe. */
-    if (auto_printf_mask && auto_printf_nonlit_line)
+     * keeps the broad default table and the runtime format is safe.  An
+     * explicit '#pragma printf'/'#pragma scanf' also suppresses it: the user
+     * already chose the converter set, so advising them to add one is noise. */
+    if (auto_printf_mask && auto_printf_nonlit_line && !user_printf_pragma)
         warn_nonliteral_format("printf", auto_printf_nonlit_file, auto_printf_nonlit_line);
-    if (auto_scanf_mask && auto_scanf_nonlit_line)
+    if (auto_scanf_mask && auto_scanf_nonlit_line && !user_scanf_pragma)
         warn_nonliteral_format("scanf", auto_scanf_nonlit_file, auto_scanf_nonlit_line);
 
     if ((fp = fopen(c_zcc_opt, "a")) == NULL) {
@@ -767,10 +777,12 @@ int main(int argc, char **argv)
                 write_redirect(ptr,value);
             } else if ( strncmp(ptr,"printf", 6) == 0 ) {
                 uint64_t value = parse_format_string(ptr + 6, printf_formats);
+                user_printf_pragma = 1;
                 write_defined("CLIB_OPT_PRINTF", (int32_t)(value & 0xffffffff), 0);
                 write_defined("CLIB_OPT_PRINTF_2", (int32_t)((value >> 32) & 0xffffffff), 0);
             } else if ( strncmp(ptr,"scanf", 5) == 0 ) {
                 uint64_t value = parse_format_string(ptr + 5, scanf_formats);
+                user_scanf_pragma = 1;
                 write_defined("CLIB_OPT_SCANF", (int32_t)(value & 0xffffffff), 0);
                 write_defined("CLIB_OPT_SCANF_2", (int32_t)((value >> 32) & 0xffffffff), 0);
             } else if ( strncmp(ptr,"string",6) == 0 ) {
