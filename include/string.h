@@ -220,14 +220,16 @@ extern char __LIB__  *strdup_fastcall(const char *s)  __z88dk_fastcall;
 
 
 extern char __LIB__  *strerror(char *s);
-#ifndef __STDC_ABI_ONLY
-extern char __LIB__  *strerror_fastcall(char *s)  __z88dk_fastcall;
-#define strerror(x) strerror_fastcall(x)
-#elif defined(__LLVMZ80)
+#if defined(__LLVMZ80)
 /* llvmz80: strerror takes int errnum per POSIX; fastcall reads arg from HL
  * (where llvmz80 places any single register arg regardless of declared type).
- * Declare with int to avoid -Wint-conversion when called as strerror(errno). */
+ * Declare with int to avoid -Wint-conversion when called as strerror(errno).
+ * This must win over the plain #ifndef branch below regardless of whether
+ * __STDC_ABI_ONLY is defined, so dropping the gate keeps the correct signature. */
 extern char __LIB__  *strerror_fastcall(int errnum)  __z88dk_fastcall;
+#define strerror(x) strerror_fastcall(x)
+#elif !defined(__STDC_ABI_ONLY)
+extern char __LIB__  *strerror_fastcall(char *s)  __z88dk_fastcall;
 #define strerror(x) strerror_fastcall(x)
 #endif
 

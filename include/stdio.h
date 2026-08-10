@@ -249,7 +249,7 @@ extern void __LIB__ closeall(void);
 __ZPROTO3(char,*,fgets,char *,s,int,l,FILE *,fp)
 
 __ZPROTO2(int,,fputs,const char *,s,FILE *,fp)
-#ifndef __STDC_ABI_ONLY
+#if !defined(__STDC_ABI_ONLY) && !defined(__LLVMZ80)
 extern int __LIB__  fputs_callee(const char *s,  FILE *fp) __smallc __z88dk_callee;
 #define fputs(a,b)   fputs_callee(a,b)
 #endif
@@ -257,16 +257,20 @@ extern int __LIB__  fputs_callee(const char *s,  FILE *fp) __smallc __z88dk_call
 
 
 extern int __LIB__ fputc(int c, FILE *fp) __smallc;
-#ifndef __STDC_ABI_ONLY
+#if !defined(__STDC_ABI_ONLY) && !defined(__LLVMZ80)
 extern int __LIB__  fputc_callee(int c, FILE *fp) __smallc __z88dk_callee;
 #define fputc(a,b)   fputc_callee(a,b)
 #define putc(bp,fp) fputc_callee(bp,fp)
 #define putchar(bp) fputc_callee(bp,stdout)
 #else
-// clang expects putchar to be a library function not just a macro.
-// __smallc carries the stack calling convention (sdcccall(0)) so clang pushes
-// the argument instead of leaving it in HL -- without it console output is
-// corrupted (see include/sys/compiler.h).
+// clang (llvmz80 + ez80) expects putchar to be a library function not just a
+// macro.  __smallc carries the stack calling convention (sdcccall(0)) so clang
+// pushes the argument instead of leaving it in HL -- without it console output
+// is corrupted (see include/sys/compiler.h).  The sccz80/sdcc __z88dk_callee
+// redirect above is excluded for llvmz80 because the classic fputs_callee/
+// fputc_callee C-#asm workers are not genuinely callee-clean the way clang's
+// z80_callee assumes, so exposing them drifts SP (program restarts in a loop);
+// the plain __smallc fputs/fputc (caller-clean _fputs/_fputc) are correct.
 extern int __LIB__ putchar(int) __smallc;
 #define putc(bp,fp) fputc(bp,fp)
 #endif
