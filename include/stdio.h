@@ -287,9 +287,6 @@ extern int __LIB__ ferror_fastcall(FILE *fp) __z88dk_fastcall;
 
 extern int __LIB__ puts(const char *) __smallc;
 
-#ifdef __STDC_ABI_ONLYe
-
-#endif
 #define getchar()  fgetc(stdin)
 
 
