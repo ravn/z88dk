@@ -114,6 +114,7 @@ newlib_skip_reason() {
         runtime_fileio_rw.sh)    echo "newlib CP/M FILE* not supported (ravn/z88dk#34 WONTFIX)"; return 0 ;;
         runtime_fileio_seek.sh)  echo "newlib CP/M FILE* not supported (ravn/z88dk#34 WONTFIX)"; return 0 ;;
         runtime_fileio_seekwrite.sh) echo "newlib CP/M FILE* not supported (ravn/z88dk#34 WONTFIX)"; return 0 ;;
+        runtime_fileio_rbplus.sh) echo "newlib CP/M FILE* not supported (ravn/z88dk#34 WONTFIX)"; return 0 ;;
         runtime_fileio_eof.sh)   echo "newlib CP/M FILE* not supported (ravn/z88dk#34 WONTFIX)"; return 0 ;;
         runtime_fileio_null.sh)  echo "newlib CP/M FILE* not supported (ravn/z88dk#34 WONTFIX)"; return 0 ;;
         runtime_fileio_multi.sh) echo "newlib CP/M FILE* not supported (ravn/z88dk#34 WONTFIX)"; return 0 ;;
