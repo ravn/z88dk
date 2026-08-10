@@ -41,6 +41,16 @@
 #define __z88dk_deprecated
 #define __z88dk_sdccdecl
 
+// __preserves_regs(...) is a builtin keyword in sccz80 and SDCC (it annotates
+// which registers a hand-asm routine leaves untouched), but clang/ez80-clang
+// have no such keyword.  Without a no-op mapping, ctype.h's fastcall decls
+// (e.g. `isdigit_fastcall(int) __z88dk_fastcall CTYPE_PRESERVE`) fail to parse
+// under clang once __STDC_ABI_ONLY is not defined ("expected function body
+// after function declarator").  Map it to nothing for the clang toolchains.
+#if __clang__ | __XCC
+#define __preserves_regs(x...)
+#endif
+
 // __z88dk_callback marks a function that CLASSIC-LIBRARY code calls back into --
 // a user callback reached through a library thunk, e.g. a qsort()/bsearch()
 // comparator, or funopen()'s read/write/seek/close hooks.  The library invokes
@@ -80,7 +90,9 @@
 
 // Make intellisense run easier..
 #if __clang__ | __CLANG | __XCC
+#if !defined(__LLVMZ80)
 #define __STDC_ABI_ONLY
+#endif
 // ravn/llvm-z80 clang honours SDCC calling conventions via the sdcccall
 // attribute.  z88dk's classic clib functions are compiled __smallc (arguments
 // pushed on the stack, caller cleans up) -- which is exactly sdcccall(0).
