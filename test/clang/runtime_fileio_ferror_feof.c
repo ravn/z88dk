@@ -1,29 +1,31 @@
-/* xfail_ferror_feof.c -- documents a REAL llvmz80 divergence on classic +cpm:
- * ferror() and feof() return GARBAGE under llvmz80 where sccz80 is correct.
+/* runtime_fileio_ferror_feof.c -- ferror()/feof() on classic +cpm must agree
+ * between sccz80 and llvmz80.
  *
- * Root cause (empirically confirmed, 2026-08-10): stdio.h declares
+ * History: this was an XFAIL documenting a REAL llvmz80 divergence -- ferror()
+ * and feof() returned GARBAGE under llvmz80 where sccz80 was correct.
+ *
+ * Root cause (fixed 2026-08-10): stdio.h declared
  *     extern int ferror(FILE *fp);            // plain, no __smallc/fastcall
  *     #ifndef __STDC_ABI_ONLY
  *     extern int ferror_fastcall(FILE*) __z88dk_fastcall;
  *     #define ferror(f) ferror_fastcall(f)
  *     #endif
- * (feof is identical).  Under llvmz80, __STDC_ABI_ONLY is in effect, so the
- * fastcall macro is skipped and the PLAIN `ferror` is used.  clang then
- * tail-calls the hand-asm `_ferror` (`jp _ferror`) passing the FILE* per
+ * (feof identical).  Under llvmz80, __STDC_ABI_ONLY is in effect, so the
+ * fastcall macro was skipped and the PLAIN `ferror` was used.  clang then
+ * tail-called the hand-asm `_ferror` (`jp _ferror`) passing the FILE* per
  * sdcccall(1) in a register -- but `_ferror`'s asm entry uses the classic
- * STACK-arg convention (`pop de` / `pop hl`), so it reads a bogus pointer and
- * returns garbage.  sccz80 uses the same asm with the matching stack ABI, so
- * it is correct.
+ * STACK-arg convention (`pop de` / `pop hl`), so it read a bogus pointer and
+ * returned garbage.  sccz80 uses the same asm with the matching stack ABI, so
+ * it was correct.
  *
- * Contrast: fileno works because it is declared `__smallc __z88dk_fastcall`
- * UNCONDITIONALLY (stdio.h:206); the fix for ferror/feof is to give them the
- * same unconditional bridged ABI (or a __ZPROTO form) so llvmz80 stops hitting
- * the stack-arg entry.
+ * Fix: drop the `#ifndef __STDC_ABI_ONLY` guard so the `ferror_fastcall`/
+ * `feof_fastcall` decl + redirect macro apply unconditionally (mirrors how
+ * `fileno` is declared `__smallc __z88dk_fastcall` at stdio.h:206).  llvmz80
+ * now reaches the fastcall entry (arg in HL) and matches sccz80.
  *
- * This is an ORACLE-DIFF XFAIL (see xfail_ferror_feof.sh).  It probes ferror/
- * feof across the whole contract and prints one token per state; sccz80 defines
- * the correct answer and llvmz80 must match it.  The four states cover BOTH
- * feof branches:
+ * This is an ORACLE-DIFF test (see .sh): it probes ferror/feof across the whole
+ * contract and prints one token per state; sccz80 defines the correct answer
+ * and llvmz80 MUST match it.  The four states cover BOTH feof branches:
  *   - fresh stream (feof=0, ferror=0)
  *   - mid-file     (feof=0, ferror=0)
  *   - true EOF     (feof=1, ferror=0)   <-- see the RECSZ note below

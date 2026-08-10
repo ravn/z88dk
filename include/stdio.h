@@ -277,17 +277,13 @@ extern int __LIB__ fgetc(FILE *fp) __smallc;
 __ZPROTO2(int,,ungetc,int,c,FILE *,fp)
 
 extern int __LIB__ feof(FILE *fp);
-#ifndef __STDC_ABI_ONLY
 extern int __LIB__ feof_fastcall(FILE *fp) __z88dk_fastcall;
 #define feof(f) feof_fastcall(f)
-#endif
 
 
 extern int __LIB__ ferror(FILE *fp);
-#ifndef __STDC_ABI_ONLY
 extern int __LIB__ ferror_fastcall(FILE *fp) __z88dk_fastcall;
 #define ferror(f) ferror_fastcall(f)
-#endif
 
 extern int __LIB__ puts(const char *) __smallc;
 
