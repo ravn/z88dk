@@ -8,23 +8,17 @@
 #include <sys/compiler.h>
 
 extern char __LIB__ *basename(char *path);
-#ifndef __STDC_ABI_ONLY
 extern char __LIB__ *basename_fastcall(char *path) __z88dk_fastcall;
 #define basename(x) basename_fastcall(x)
-#endif
 
 
 extern char __LIB__ *basename_ext(char *path);
-#ifndef __STDC_ABI_ONLY
 extern char __LIB__ *basename_ext_fastcall(char *path) __z88dk_fastcall;
 #define basename_ext(x) basename_ext_fastcall(x)
-#endif
 
 extern char __LIB__ *dirname(char *path);
-#ifndef __STDC_ABI_ONLY
 extern char __LIB__ *dirname_fastcall(char *path) __z88dk_fastcall;
 #define dirname(x) dirname_fastcall(x)
-#endif
 
 __ZPROTO2(unsigned char,*,glob,const char *,s,const char *,pattern)
 #ifndef __STDC_ABI_ONLY
@@ -46,10 +40,8 @@ extern unsigned char __LIB__ glob_fat_callee(const char *s,const char *pattern) 
 
 
 extern char __LIB__ *pathnice(char *path);
-#ifndef __STDC_ABI_ONLY
 extern char __LIB__ *pathnice_fastcall(char *path) __z88dk_fastcall;
 #define pathnice(x) pathnice_fastcall(x)
-#endif
 
 
 #endif
