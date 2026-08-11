@@ -3577,9 +3577,21 @@ static void configure_compiler(void)
              * -Cg options feed `clangarg`, appended AFTER this buf (see the
              * add_option_to_compiler(clangarg) below), and clang honours the
              * LAST -std on its command line -- so the caller's -Cg-std wins
-             * over this default without editing the config or rebuilding zcc. */
+             * over this default without editing the config or rebuilding zcc.
+             *
+             * FREESTANDING: we deliberately do NOT emit -ffreestanding here.
+             * Hosted mode (clang's default) lets the middle-end recognise C
+             * library functions and apply optimisations such as
+             * printf("foo\n") -> puts("foo") (ravn/z88dk#57), which are worth
+             * ~20% on bare-string-printf-heavy code.  Those synthesized calls
+             * are made ABI-correct on the classic clib by the
+             * -z80-classic-libc-cc flag added below.  A caller who needs
+             * freestanding semantics (no libcall recognition/synthesis) must
+             * ask for it EXPLICITLY with `-Cg-ffreestanding`; because -Cg
+             * options are appended after this buf and clang takes the LAST of
+             * -ffreestanding/-fhosted, that override wins with no rebuild. */
             snprintf(buf, sizeof(buf),
-                     "--target=z80 -S -ffreestanding -std=gnu23 -o - %s",
+                     "--target=z80 -S -std=gnu23 -o - %s",
                      optflag);
         }
         add_option_to_compiler(buf);
@@ -3595,6 +3607,23 @@ static void configure_compiler(void)
          * libsrc/l/llvmz80/__addsf3.asm).  The math32 library itself is still
          * selected at link time via --math32 (see ravn/z88dk#44). */
         add_option_to_compiler("-mllvm -z80-float-sdcccall0");
+
+        /* Classic clib calling convention on middle-end-synthesized libcalls
+         * (ravn/z88dk#57, ravn/llvm-z80 -z80-classic-libc-cc).  Because we
+         * compile hosted (no -ffreestanding above), clang's middle-end may
+         * SYNTHESIZE C library calls -- most importantly printf("foo\n") ->
+         * puts("foo") in InstCombine -- creating the callee declaration itself
+         * with the default C calling convention.  The z88dk classic clib is
+         * built with the __smallc convention (CallingConv::Z80_SmallC = cc132:
+         * stack args, caller cleanup, return in DE), so a synthesized call made
+         * with the default C CC would read stack garbage at runtime (verified:
+         * printf banners printed junk under ntvcm).  This flag stamps cc132 on
+         * those freshly-created libfunc declarations, so the emitted calls
+         * honour the classic ABI.  It is the counterpart of dropping
+         * -ffreestanding: the two together capture the printf->puts win with a
+         * correct ABI.  Always correct on this path (it is always the classic
+         * clib bridge, never a standalone ELF/compiler-rt target). */
+        add_option_to_compiler("-mllvm -z80-classic-libc-cc");
 
         if (clangarg) {
             add_option_to_compiler(clangarg);

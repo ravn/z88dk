@@ -171,6 +171,45 @@ codegen dominate). Render output is byte-identical between `-O2` and `-O3`.
 
 ---
 
+## 6b. Hosted by default — C-library optimisations & how to opt out (ravn/z88dk#57)
+
+The `-compiler=llvmz80` compile line is **hosted** (zcc does **not** pass
+`-ffreestanding`). Hosted mode lets clang's middle-end recognise C library
+functions and optimise them — most valuably `printf("foo\n")` → `puts("foo")`
+in InstCombine, plus constant-folding of `strlen`/`strcmp`/`abs`/`isdigit`… on
+constant arguments. On bare-string-`printf`-heavy code this is worth **~20%**
+(measured: a 7-`printf` banner program 7338 → 5881 B, **−19.8%**, correct output
+under ntvcm).
+
+These middle-end-**synthesized** calls (clang creates the `puts` declaration
+itself) are made ABI-correct on the classic clib by the paired backend flag
+`-mllvm -z80-classic-libc-cc`, which zcc also emits. It stamps the classic
+`__smallc` calling convention (`CallingConv::Z80_SmallC` = cc132: stack args,
+caller cleanup, return in DE) on those declarations, so the emitted call matches
+the real `_puts`/`_strlen`/… routines. Without it, hosted mode would emit calls
+with the default C CC and read stack garbage at runtime. Both flags are wired
+into the config together (see `src/zcc/zcc.c`, the `-compiler=llvmz80` branch);
+`-z80-classic-libc-cc` is off by default in the compiler and only turned on here.
+
+**Requesting freestanding explicitly (outside zcc's config).** If you need
+freestanding semantics — no libcall recognition, no `printf`→`puts`, no
+constant folds of library functions (e.g. to guarantee every `printf` stays a
+`printf`, or when not linking the classic clib) — pass it yourself on the zcc
+command line with the `-Cg` clang-arg forwarder:
+
+```sh
+zcc +cpm -compiler=llvmz80 --math32 -O2 -Cg-ffreestanding -o prog prog.c
+```
+
+`-Cg<arg>` forwards `<arg>` straight to clang, appended **after** the config's
+own flags; clang honours the **last** of `-ffreestanding`/`-fhosted`, so
+`-Cg-ffreestanding` reliably overrides the hosted default with no rebuild
+(verified: same banner program 5881 → 7338 B, i.e. back to the freestanding
+size, output still correct). This is the supported way to select freestanding —
+zcc no longer forces it, so the choice is the caller's.
+
+---
+
 ## 7. Verification recipes
 
 ```sh
