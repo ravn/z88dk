@@ -55,3 +55,7 @@ win32/.github/copilot-instructions.md
 # Local macOS native build markers/vendored deps (not upstream-tracked)
 /.macos-patched
 /third_party/
+
+# CP/M test I/O data artifacts (created by clang test runs)
+A.DAT
+WP.DAT
