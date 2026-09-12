@@ -5,7 +5,7 @@
 ; divide (selectUDivMod8, hasOptSize); signed divide lowers to negate + these.
 ; Bridges adapt clang's ABI to z88dk's core l_fast_divu_8_8x8.
 ;
-;   llvm-z80 ABI : enter A=dividend, E=divisor; exit A=quotient/remainder
+;   llvm-z80 ABI : enter A=dividend, L=divisor; exit A=quotient/remainder
 ;   core ABI     : enter L=dividend, E=divisor; exit L=quotient, E=remainder
 
 INCLUDE "config_private.inc"
@@ -19,13 +19,15 @@ PUBLIC ___umodqi3
 EXTERN l_fast_divu_8_8x8
 
 ___udivqi3:
-   ld l,a                       ; L = dividend (E already = divisor)
+   ld e,l                       ; E = divisor for the z88dk core
+   ld l,a                       ; L = dividend for the z88dk core
    call l_fast_divu_8_8x8       ; L = quotient, E = remainder
    ld a,l                       ; A = quotient
    ret
 
 ___umodqi3:
-   ld l,a                       ; L = dividend
+   ld e,l                       ; E = divisor for the z88dk core
+   ld l,a                       ; L = dividend for the z88dk core
    call l_fast_divu_8_8x8       ; E = remainder
    ld a,e                       ; A = remainder
    ret

@@ -13,8 +13,8 @@
  *           __divhi3 / __udivhi3 /
  *           __modhi3 / __umodhi3           : emitted at -O2 and --opt-code-size
  *           __divhi3_fast / __udivhi3_fast /
- *           __modhi3_fast / __umodhi3_fast : emitted at -O3 (clang -O3 renames
- *                                            these to the _fast cores)
+ *           __modhi3_fast / __umodhi3_fast : retained bridge aliases; current
+ *                                            clang emits the plain names
  *   8-bit   __udivqi3 / __umodqi3          : emitted at --opt-code-size (inlined otherwise)
  *   32-bit  __divsi3 / __udivsi3 /
  *           __modsi3 / __umodsi3           : lone volatile div/mod blocks the
