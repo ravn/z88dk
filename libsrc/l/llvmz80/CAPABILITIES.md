@@ -53,7 +53,7 @@ zcc +cpm -subtype=rc700 -compiler=llvmz80 --math32 -O2 -o prog prog.c   # double
 | Area | Works | Notes |
 |------|-------|-------|
 | **Core codegen** | recursion, structs, globals, 32-bit `long` mul/div/mod, BSS kept out of the `.COM` image, `.quad`/`.rodata.cstN` split via copt bridge | `-O0..-O3`, `-Os`/`-Oz`. Production RC702 firmware (autoload, rcbios, cpnos) ships on this. |
-| **`string.h`** | mem*, str[cpy/cmp/cat/chr/ncpy], strlen + fastcall single-arg string fns, strstr/strtok/strncmp/… | direct `__smallc` (`z80_smallc`) calls, no `ex de,hl` adapter since #279 |
+| **`string.h`** | mem*, str[cpy/cmp/cat/chr/ncpy], strlen + fastcall single-arg string fns, strstr/strtok/strncmp/… | direct `__smallc` (`smallc`) calls, no `ex de,hl` adapter since #279 |
 | **`ctype.h`** | isdigit/isalpha/toupper/tolower & siblings | |
 | **`stdlib.h`** | malloc/calloc/realloc/free, atoi/atol/itoa, strtol/strtoul/strtod, qsort, bsearch, rand/srand, abs/labs, getenv, getopt | qsort/bsearch comparators use `__z88dk_callback` |
 | **`stdio.h` — streams** | printf/sprintf/snprintf/puts/putchar/getchar, the full **FILE\*** API | variadic uses `__vasmallc` → `sdcccall(0)` (count in HL) |
@@ -77,7 +77,7 @@ ravn/llvm-z80#277). The `-compiler=llvmz80` path auto-injects `-mllvm
 Route: `-clib=newlib_iy` / `-clib=newlib_ix`. **35 PASS / 0 FAIL** in `test/clang`
 (newlib_iy leg), file-open cases skipped by design. Direct `_callee`/`_fastcall`
 calls (no adapter modules — the newlib headers redirect plain names to the native
-variants and clang matches `z80_callee`/`z80_fastcall` exactly).
+variants and clang matches `z88dk_callee`/`z88dk_fastcall` exactly).
 
 Works: `string.h`, `ctype`, `stdlib` (malloc/calloc/realloc/free/atoi/qsort/…),
 the full `stdio` **FILE\*** API *except real disk open* (console/stream I/O
@@ -123,9 +123,9 @@ GPR**, IY reserved. z88dk decorations map to clang attributes **only under
 
 | z88dk decoration | clang attribute | ABI |
 |------------------|-----------------|-----|
-| `__smallc` (= `z80_smallc`) | `z80_smallc` | stack args **left-to-right**, caller-clean, i16 return in HL |
-| `__z88dk_callee` | `z80_callee` | stack args, callee-clean, right-to-left |
-| `__z88dk_fastcall` | `z80_fastcall` | one arg in L/HL/DE:HL by width; return same |
+| `__smallc` (= `smallc`) | `smallc` | stack args **left-to-right**, caller-clean, i16 return in HL |
+| `__z88dk_callee` | `z88dk_callee` | stack args, callee-clean, right-to-left |
+| `__z88dk_fastcall` | `z88dk_fastcall` | one arg in L/HL/DE:HL by width; return same |
 | `__vasmallc` | `sdcccall(0)` | variadic; count returned in HL |
 
 If this mapping is absent the attributes are no-ops and clang falls back to

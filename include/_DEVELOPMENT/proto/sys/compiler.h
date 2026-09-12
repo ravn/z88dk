@@ -54,8 +54,8 @@ include(__link__.m4)
 // ravn/llvm-z80 clang honours the z88dk / SDCC calling conventions via real
 // function attributes (the same mapping as the classic sys/compiler.h): the
 // newlib workers are the sdcc_ix build, so __smallc == sdcccall(0) (stack args,
-// caller-clean, i16 return in HL), __z88dk_callee == z80_callee (stack args,
-// callee-clean), __z88dk_fastcall == z80_fastcall (single arg in L/HL/DE:HL by
+// caller-clean, i16 return in HL), __z88dk_callee == z88dk_callee (stack args,
+// callee-clean), __z88dk_fastcall == z88dk_fastcall (single arg in L/HL/DE:HL by
 // width).  Without these the attributes are no-ops and clang uses its default
 // sdcccall(1) (HL/DE args, DE return) -> the worker and clang disagree on the
 // ABI and, e.g., a qsort comparator scrambles the array.
@@ -64,8 +64,8 @@ include(__link__.m4)
 // __CLANG (it is a clang fork too) but is __stdc / HL-return already and may
 // not support sdcccall -- it must keep the plain no-op mapping in the #else.
 #define __smallc __attribute__((sdcccall(0)))
-#define __z88dk_callee __attribute__((z80_callee))
-#define __z88dk_fastcall __attribute__((z80_fastcall))
+#define __z88dk_callee __attribute__((z88dk_callee))
+#define __z88dk_fastcall __attribute__((z88dk_fastcall))
 // The variadic stdio family returns its count in HL (classic clib convention);
 // declaring it __smallc == sdcccall(0) makes clang read the return from HL.
 #undef  __vasmallc
@@ -73,7 +73,7 @@ include(__link__.m4)
 #else
 // ez80-clang (and any other __clang__|__CLANG that is not __LLVMZ80): keep the
 // conventions as no-ops -- it uses the __stdc ABI and must not be given the
-// llvmz80 sdcccall/z80_callee/z80_fastcall attributes.
+// llvmz80 sdcccall/z88dk_callee/z88dk_fastcall attributes.
 #define __smallc
 #define __z88dk_callee
 #define __z88dk_fastcall

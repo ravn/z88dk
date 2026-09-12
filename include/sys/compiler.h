@@ -100,16 +100,16 @@
 // HL, so e.g. putchar('H') -> the callee does `pop hl` and reads stack garbage
 // (console output is corrupted).
 //
-// __z88dk_fastcall maps to the z80_fastcall attribute, which selects the
+// __z88dk_fastcall maps to the z88dk_fastcall attribute, which selects the
 // ravn/llvm-z80 backend's z88dk-fastcall convention (CallingConv::
 // Z80_Z88dkFastCall).  A single argument is passed in a fixed register by
 // width, matching z88dk's classic clib (verified from source):
-//   width | z88dk_fastcall (asm reads)      | z80_fastcall (backend)
+//   width | z88dk_fastcall (asm reads)      | z88dk_fastcall (backend)
 //   ------+---------------------------------+---------------------------------
 //   8-bit | L      (rs232_put.asm: `ld a,l`)| L      <- match
 //   16-bit| HL     (swapendian.asm)         | HL     <- match
 //   32-bit| DEHL                            | DE:HL  <- match (DE high, HL low)
-// The return value uses the same registers.  Before z80_fastcall existed the
+// The return value uses the same registers.  Before z88dk_fastcall existed the
 // macro was a no-op that only happened to work for a single 16-bit argument
 // (clang's default i16 arg also lands in HL); 8/32-bit args were wrong.  Now
 // all three widths are correct by construction.  The 16-bit contract remains
@@ -117,7 +117,7 @@
 //   z88dk/test/clang/fastcall_abi_16.c
 // and the full L/HL/DE:HL discipline by the LLVM lit test
 //   llvm/test/CodeGen/Z80/z88dk-fastcall.ll (in the ravn/llvm-z80 tree).
-// __z88dk_callee maps to the z80_callee attribute: arguments pushed on the
+// __z88dk_callee maps to the z88dk_callee attribute: arguments pushed on the
 // stack like sdcccall(0), but the CALLEE cleans them up (CallingConv::
 // Z80_Z88dkCallee).  This is the correct mapping -- z88dk clib functions marked
 // __z88dk_callee callee-clean in their .asm, so the previous no-op was a latent
@@ -125,7 +125,7 @@
 // Backend mechanism pinned by llvm/test/CodeGen/Z80/z88dk-callee.ll; frontend
 // mapping by clang/test/CodeGen/z80-callee.c.  End-to-end validation against a
 // real clib link is Phase C.
-// __smallc maps to the z80_smallc attribute: arguments pushed LEFT-TO-RIGHT
+// __smallc maps to the smallc attribute: arguments pushed LEFT-TO-RIGHT
 // (last arg nearest the return address), CALLER cleans the stack -- byte-for-byte
 // the SDCC/sccz80 __smallc layout (CallingConv::Z80_SmallC, ravn/llvm-z80#279).
 // This is what the classic clib workers are compiled with, so a multi-arg
@@ -133,14 +133,14 @@
 // bridge (fixes the register-vs-stack ABI class ravn/z88dk#22/#41).  Earlier this
 // was wired to sdcccall(0) (right-to-left), which happened to work only for the
 // 1-argument console workers where the two orders coincide.
-#define __smallc __attribute__((z80_smallc))
-#define __z88dk_callee __attribute__((z80_callee))
-#define __z88dk_fastcall __attribute__((z80_fastcall))
+#define __smallc __attribute__((smallc))
+#define __z88dk_callee __attribute__((z88dk_callee))
+#define __z88dk_fastcall __attribute__((z88dk_fastcall))
 
 // ravn/z88dk#31: the variadic stdio family (printf/sprintf/scanf/...) returns
 // its count in HL (the classic clib convention) and its varargs are pushed
 // RIGHT-TO-LEFT so the fixed format arg is reachable.  That is exactly
-// sdcccall(0), NOT __smallc -- now that __smallc means z80_smallc (left-to-right)
+// sdcccall(0), NOT __smallc -- now that __smallc means smallc (left-to-right)
 // the two are no longer interchangeable, so __vasmallc must pin sdcccall(0)
 // explicitly.  Guarded to __LLVMZ80: ez80-clang (__stdc, HL return) is already
 // correct and must not be touched (it may not support sdcccall).
