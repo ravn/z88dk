@@ -101,6 +101,45 @@ echo ""
 
 PASS=0; FAIL=0; SKIP=0; XFAIL=0; XPASS=0
 
+# ---- per-test watchdog ----------------------------------------------------
+# Each test builds a .com and runs it under ntvcm.  A miscompiled/looping
+# binary makes ntvcm spin forever, and since the tests run sequentially with
+# no timeout that one hang blocks the whole suite (observed: a 27-minute stall
+# on nontrivial_demo).  run_one() runs a test in the background and enforces a
+# hard wall-clock limit; on timeout it kills the test shell AND any ntvcm it
+# spawned (only one runs at a time -- the suite is sequential -- so `pkill -x
+# ntvcm` is safe) and reports the test as a TIMEOUT (counted as FAIL).
+#
+# TEST_TIMEOUT is the per-test limit in seconds (default 25; a healthy test
+# runs in well under a second, so this only ever fires on a genuine hang).
+TEST_TIMEOUT=${TEST_TIMEOUT:-25}
+
+# run_one <script> <outfile> : run the test, capturing combined output to
+# <outfile>.  Returns 0 if the test finished on its own, 124 if it was killed
+# for exceeding TEST_TIMEOUT.  Called from an `if` so `set -e` is suspended
+# inside it (the kill/pkill nonzero exits must not abort the suite).
+run_one() {
+    _script="$1"; _out="$2"
+    : > "$_out"
+    sh "$_script" > "$_out" 2>&1 &
+    _spid=$!
+    _elapsed=0
+    while kill -0 "$_spid" 2>/dev/null; do
+        if [ "$_elapsed" -ge "$TEST_TIMEOUT" ]; then
+            pkill -x ntvcm 2>/dev/null
+            kill "$_spid" 2>/dev/null
+            sleep 1
+            kill -9 "$_spid" 2>/dev/null
+            wait "$_spid" 2>/dev/null
+            return 124
+        fi
+        sleep 1
+        _elapsed=$((_elapsed + 1))
+    done
+    wait "$_spid" 2>/dev/null
+    return 0
+}
+
 # Tests that do not apply to the newlib path (classic-specific behaviour) or hit
 # a known, still-unfixed newlib gap.  Skipped only when TEST_CLIB is a newlib
 # variant, with a reason, so the newlib run stays green while the gaps stay
@@ -144,6 +183,20 @@ newlib_skip_reason() {
     return 1
 }
 
+# Count testable scripts up front so each line can show N/total progress.
+TOTAL=0
+for script in "$DIR"/*.sh; do
+    _n=$(basename "$script")
+    case "$_n" in "$SELF"|run_all.sh|run_matrix.sh) continue ;; esac
+    TOTAL=$((TOTAL + 1))
+done
+DONE=0
+SUITE_START=$(date +%s)
+
+# tally : print the running score so far (continuous reporting).
+tally() { printf '        tally: %d pass  %d fail  %d skip  %d xfail   (%d/%d done)\n' \
+                 "$PASS" "$FAIL" "$SKIP" "$XFAIL" "$DONE" "$TOTAL"; }
+
 for script in "$DIR"/*.sh; do
     name=$(basename "$script")
     # Skip harness scripts, not just this file: run_matrix.sh calls run_all.sh,
@@ -154,41 +207,63 @@ for script in "$DIR"/*.sh; do
 
     if [ "$TEST_CLIB" != "classic" ]; then
         if reason=$(newlib_skip_reason "$name"); then
-            echo "skip  $name (newlib: $reason)"
+            DONE=$((DONE + 1))
+            echo "[$DONE/$TOTAL] skip  $name (newlib: $reason)"
             SKIP=$((SKIP + 1))
+            tally
             continue
         fi
     fi
 
-    result=$(sh "$script" 2>&1 | tail -1)
+    DONE=$((DONE + 1))
+    # In-flight line (printed BEFORE the test runs): if a test wedges, you can
+    # see which one is in flight during the up-to-TEST_TIMEOUT wait.
+    echo "[$DONE/$TOTAL] run   $name ..."
+
+    _tout=$(mktemp)
+    _t0=$(date +%s)
+    if run_one "$script" "$_tout"; then
+        result=$(tail -1 "$_tout")
+    else
+        result="__TIMEOUT__"
+    fi
+    _dt=$(( $(date +%s) - _t0 ))
+    rm -f "$_tout"
+
     case "$result" in
+        __TIMEOUT__)
+            echo "[$DONE/$TOTAL] FAIL  $name -- TIMEOUT: killed after ${TEST_TIMEOUT}s (hang)"
+            FAIL=$((FAIL + 1))
+            ;;
         PASS:*|PASS\ *)
-            echo "PASS  $name"
+            echo "[$DONE/$TOTAL] PASS  $name (${_dt}s)"
             PASS=$((PASS + 1))
             ;;
         # XFAIL: a known, documented gap that is EXPECTED to fail (e.g. a
         # deliberately-absent classic-clib function).  Ignored — not a failure.
         XFAIL:*|XFAIL\ *)
-            echo "xfail $name ($result)"
+            echo "[$DONE/$TOTAL] xfail $name ($result)"
             XFAIL=$((XFAIL + 1))
             ;;
         # XPASS: an xfail test that UNEXPECTEDLY succeeded — the gap closed;
         # surface it so the xfail note can be retired.  Counts as a failure.
         XPASS:*|XPASS\ *)
-            echo "XPASS $name -- $result  (unexpected: gap closed, retire the xfail)"
+            echo "[$DONE/$TOTAL] XPASS $name -- $result  (unexpected: gap closed, retire the xfail)"
             FAIL=$((FAIL + 1))
             ;;
         SKIP:*|SKIP\ *)
-            echo "skip  $name ($result)"
+            echo "[$DONE/$TOTAL] skip  $name ($result)"
             SKIP=$((SKIP + 1))
             ;;
         *)
-            echo "FAIL  $name -- $result"
+            echo "[$DONE/$TOTAL] FAIL  $name -- $result"
             FAIL=$((FAIL + 1))
             ;;
     esac
+    tally
 done
 
+_suite_dt=$(( $(date +%s) - SUITE_START ))
 echo ""
-echo "Results: $PASS PASS, $FAIL FAIL, $SKIP SKIP, $XFAIL XFAIL"
+echo "Results: $PASS PASS, $FAIL FAIL, $SKIP SKIP, $XFAIL XFAIL  (${_suite_dt}s total, TEST_TIMEOUT=${TEST_TIMEOUT}s)"
 [ "$FAIL" -eq 0 ]
