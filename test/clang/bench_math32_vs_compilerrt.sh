@@ -43,6 +43,18 @@ MATH32_DIR="$DIR/../../libsrc"
 command -v zcc >/dev/null 2>&1 || { echo "SKIP: zcc not on PATH"; exit 0; }
 command -v z88dk-ticks >/dev/null 2>&1 || { echo "SKIP: z88dk-ticks not on PATH"; exit 0; }
 LLVM_Z80_BUILD=${LLVM_Z80_BUILD:-}
+if [ -z "$LLVM_Z80_BUILD" ]; then
+	for candidate in \
+		"/Users/ravn/z80/llvm-z80/build-macos" \
+		"/Users/ravn/z80/llvm-z80/build" \
+		"/home/ravn/z80/llvm-z80/build-macos" \
+		"/home/ravn/z80/llvm-z80/build"; do
+		if [ -x "$candidate/bin/clang" ] && "$candidate/bin/clang" --version 2>&1 | grep -q "z80\|Z80"; then
+			LLVM_Z80_BUILD="$candidate"
+			break
+		fi
+	done
+fi
 [ -n "$LLVM_Z80_BUILD" ] || { echo "SKIP: set LLVM_Z80_BUILD to the llvm-z80 build dir"; exit 0; }
 CLANG="$LLVM_Z80_BUILD/bin/clang"
 LLD="$LLVM_Z80_BUILD/bin/ld.lld"
@@ -150,3 +162,5 @@ run_op i2f     'rf = (float)ia;' 'rf = (float)ia;' "$RT_LIB/floatsisf.o"
 echo ""
 echo "=== -ffast-math compare (___cmpsf2_fast) ==="
 run_op compare_fast 'r = (a < b);' 'r = (a < b);' "$RT_LIB/cmpsf2.o" "-ffast-math" "-ffast-math"
+
+echo "PASS: bench_math32_vs_compilerrt"
