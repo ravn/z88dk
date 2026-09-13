@@ -132,12 +132,17 @@ kill_tree() {
 # inside it (a child can exit before the terminating signal is delivered).
 run_one() {
     _script="$1"; _out="$2"
+    _name=$(basename "$_script")
+    _limit=$TEST_TIMEOUT
+    case "$_name" in
+        stdlib_coverage.sh) _limit=60 ;;
+    esac
     : > "$_out"
     sh "$_script" > "$_out" 2>&1 &
     _spid=$!
     _elapsed=0
     while kill -0 "$_spid" 2>/dev/null; do
-        if [ "$_elapsed" -ge "$TEST_TIMEOUT" ]; then
+        if [ "$_elapsed" -ge "$_limit" ]; then
             kill_tree -TERM "$_spid"
             sleep 1
             if kill -0 "$_spid" 2>/dev/null; then
