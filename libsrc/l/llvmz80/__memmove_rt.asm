@@ -31,9 +31,11 @@ SECTION code_l_clang
 ; so the assembly-visible symbol is ___memmove_rt (three underscores) --
 ; mirrors ___mulsi3/___divsi3 in the neighboring bridges.
 PUBLIC ___memmove_rt
+PUBLIC ___z80_memmove_builtin
 
 EXTERN asm_memmove
 
 ___memmove_rt:
+___z80_memmove_builtin:
    ex de,hl                     ; llvm-z80 dst=HL,src=DE -> core src=HL,dst=DE
    jp asm_memmove                ; tail call; core's return values are unused (void)

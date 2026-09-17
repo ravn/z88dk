@@ -8,7 +8,7 @@ verified by disassembling real caller/callee code with this clang (dates in
 parentheses); re-verify with the same method if the backend changes.
 
 > **2026-08 update (ravn/llvm-z80#279):** clang's `__smallc` now maps to the
-> **`z80_smallc`** calling convention (arguments pushed **left-to-right**,
+> **`smallc`** calling convention (arguments pushed **left-to-right**,
 > caller-cleans) — byte-for-byte the SDCC/sccz80 `__smallc` layout. It used to be
 > wired to `sdcccall(0)` (right-to-left), which only happened to work for the
 > 1-argument console workers. This removed a whole class of reversed-parameter
@@ -22,13 +22,13 @@ parentheses); re-verify with the same method if the backend changes.
 | Macro (portable spelling) | llvmz80 attribute | push order | cleanup | 16-bit return | Use |
 |---|---|---|---|---|---|
 | *(none / default)* | `sdcccall(1)` | arg1→HL, arg2→DE, rest R→L | callee | `DE` | what an unannotated `extern` uses |
-| `__smallc` | `z80_smallc` | **left-to-right** (all on stack) | caller | `HL` | call a classic `__smallc` clib worker |
+| `__smallc` | `smallc` | **left-to-right** (all on stack) | caller | `HL` | call a classic `__smallc` clib worker |
 | `__z88dk_callback` | `sdcccall(0)` | right-to-left (all on stack) | caller | `HL` | a callback the library calls back into |
 | `__vasmallc` | `sdcccall(0)` | right-to-left | caller | `HL` | a variadic library function (printf…) |
-| `__z88dk_callee` | `z80_callee` | right-to-left | **callee** | `HL`/`A` | a `*_callee` clib entry |
-| `__z88dk_fastcall` | `z80_fastcall` | single arg in `L`/`HL`/`DE:HL` | — | by width | a `*_fastcall` clib entry |
+| `__z88dk_callee` | `z88dk_callee` | right-to-left | **callee** | `HL`/`A` | a `*_callee` clib entry |
+| `__z88dk_fastcall` | `z88dk_fastcall` | single arg in `L`/`HL`/`DE:HL` | — | by width | a `*_fastcall` clib entry |
 
-`z80_smallc` and `sdcccall(0)` are **mirror images** for a multi-argument call
+`smallc` and `sdcccall(0)` are **mirror images** for a multi-argument call
 (left-to-right vs right-to-left); they coincide only for a single argument. This
 is why `__smallc` and `__z88dk_callback`/`__vasmallc` are *different* macros even
 though all three are "stack + caller-clean + HL return". Getting the direction
@@ -56,7 +56,7 @@ function is emitted with, and the one a bridge must match when *called by* clang
 - **Register preservation**: `HL`/`DE`/`BC`/`AF` caller-saved, `IX` callee-saved,
   `IY` reserved.
 
-## `__smallc` == `z80_smallc` — the classic stack convention
+## `__smallc` == `smallc` — the classic stack convention
 
 Used to call a classic `__smallc` clib worker directly. Byte-for-byte the
 SDCC/sccz80 `__smallc` layout, so an annotated declaration stays source-portable
@@ -75,7 +75,7 @@ SDCC/sccz80 `__smallc` layout, so an annotated declaration stays source-portable
 ### Consequence — arg order now MATCHES the classic worker (no reversal)
 
 A classic `__smallc` worker reads `ix+4 = last-declared arg`, `ix+6 = …`, i.e.
-**last arg on top, first arg deepest**. Because `z80_smallc` pushes left-to-right,
+**last arg on top, first arg deepest**. Because `smallc` pushes left-to-right,
 clang lands the **first** declared param deepest and the **last** on top — exactly
 what the worker wants. So the natural-order declaration is correct as written:
 
@@ -101,7 +101,7 @@ result in `HL`.
 - **llvmz80/clang**: clang's default is `sdcccall(1)` (register args), which does
   NOT match → the macro expands to `__attribute__((sdcccall(0)))`.
 
-It is deliberately **not** `__smallc`: `__smallc` is `z80_smallc` (left-to-right),
+It is deliberately **not** `__smallc`: `__smallc` is `smallc` (left-to-right),
 the mirror of `sdcccall(0)`, so a `__smallc` comparator would receive its two
 operands swapped and **invert the sort** (verified at runtime). Full doc +
 per-compiler definitions live in `include/sys/compiler.h`. Usage:
@@ -128,7 +128,7 @@ plain natural-order `__smallc` prototype of the public worker.
 extern r name(t1 a1, …, tN aN) __smallc;
 ```
 
-`__smallc == z80_smallc` (left-to-right), which is exactly the layout the classic
+`__smallc == smallc` (left-to-right), which is exactly the layout the classic
 `_name` workers read, so **clang calls them directly** — no `___name` low-level,
 no reversed params, no forwarding inline, no hand-asm bridge, no `ex de,hl`
 (the worker returns HL and clang adds the swap itself). `__ZPROTO3N` is now
@@ -136,7 +136,7 @@ equivalent to `__ZPROTO3` for clang (both natural-order `__smallc`).
 
 ## Superseded machinery (historical — pre-#279)
 
-Before `__smallc` meant `z80_smallc`, the clang `__ZPROTO` branch declared a
+Before `__smallc` meant `smallc`, the clang `__ZPROTO` branch declared a
 **reversed-parameter** `___name` low-level under the register default and a
 forwarding inline, and bridges came in two flavours:
 
@@ -148,7 +148,7 @@ forwarding inline, and bridges came in two flavours:
   `__smallc` global.
 
 Both existed **only** to compensate for `__smallc == sdcccall(0)` putting the
-first param on top. With `z80_smallc` the natural declaration already produces
+first param on top. With `smallc` the natural declaration already produces
 the worker's layout, so these are no longer emitted; any remaining `___name`
 hand-asm bridges are unreferenced (the linker drops them). Do **not** write new
 reversed-param bridges — declare the worker `__smallc` in natural order.
@@ -167,8 +167,8 @@ file I/O goes through the **stdio `FILE*` layer** (complete, MAME-verified).
 ## Checklist to add/verify a `__ZPROTO` bridge
 
 1. Prefer a plain `__ZPROTO*` (or `extern … __smallc`) natural-order declaration:
-   `z80_smallc` calls the classic `_name` worker directly, no asm.
-2. For a `*_callee` entry use `__smallc __z88dk_callee` (the `z80_callee`
+   `smallc` calls the classic `_name` worker directly, no asm.
+2. For a `*_callee` entry use `__smallc __z88dk_callee` (the `z88dk_callee`
    attribute wins — callee-cleans, right-to-left); for a `*_fastcall` entry use
    `__z88dk_fastcall`.
 3. For a callback the library calls back into (comparator/hook), put
@@ -242,7 +242,7 @@ for llvmz80 is pinned to `sdcccall(0)` explicitly:
 ```
 
 > Note: this was `#define __vasmallc __smallc` while `__smallc` still meant
-> `sdcccall(0)`. Once `__smallc` became `z80_smallc` (left-to-right) the two
+> `sdcccall(0)`. Once `__smallc` became `smallc` (left-to-right) the two
 > stopped being interchangeable, so `__vasmallc` now pins `sdcccall(0)` directly.
 > `sdcccall(1)` would read the count from `DE` (garbage); the fix changes clang's
 > own call-site codegen — **no asm trampoline**. Guarded to `__LLVMZ80`;

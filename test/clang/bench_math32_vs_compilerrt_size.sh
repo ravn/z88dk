@@ -35,6 +35,18 @@ MATH32_DIR="$DIR/../../libsrc"
 
 command -v zcc >/dev/null 2>&1 || { echo "SKIP: zcc not on PATH"; exit 0; }
 LLVM_Z80_BUILD=${LLVM_Z80_BUILD:-}
+if [ -z "$LLVM_Z80_BUILD" ]; then
+	for candidate in \
+		"/Users/ravn/z80/llvm-z80/build-macos" \
+		"/Users/ravn/z80/llvm-z80/build" \
+		"/home/ravn/z80/llvm-z80/build-macos" \
+		"/home/ravn/z80/llvm-z80/build"; do
+		if [ -x "$candidate/bin/clang" ] && "$candidate/bin/clang" --version 2>&1 | grep -q "z80\|Z80"; then
+			LLVM_Z80_BUILD="$candidate"
+			break
+		fi
+	done
+fi
 [ -n "$LLVM_Z80_BUILD" ] || { echo "SKIP: set LLVM_Z80_BUILD to the llvm-z80 build dir"; exit 0; }
 CLANG="$LLVM_Z80_BUILD/bin/clang"
 LLD="$LLVM_Z80_BUILD/bin/ld.lld"
@@ -123,3 +135,5 @@ elif [ "$rt_delta" -lt "$m32_delta" ]; then
 else
 	echo "tie"
 fi
+
+echo "PASS: bench_math32_vs_compilerrt_size (m32_delta=$m32_delta, rt_delta=$rt_delta)"

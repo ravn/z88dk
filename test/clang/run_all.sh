@@ -107,29 +107,47 @@ PASS=0; FAIL=0; SKIP=0; XFAIL=0; XPASS=0
 # no timeout that one hang blocks the whole suite (observed: a 27-minute stall
 # on nontrivial_demo).  run_one() runs a test in the background and enforces a
 # hard wall-clock limit; on timeout it kills the test shell AND any ntvcm it
-# spawned (only one runs at a time -- the suite is sequential -- so `pkill -x
-# ntvcm` is safe) and reports the test as a TIMEOUT (counted as FAIL).
+# spawned and reports the test as a TIMEOUT (counted as FAIL).
 #
 # TEST_TIMEOUT is the per-test limit in seconds (default 25; a healthy test
 # runs in well under a second, so this only ever fires on a genuine hang).
 TEST_TIMEOUT=${TEST_TIMEOUT:-25}
 
+# kill_tree <signal> <pid>: terminate the test shell and only its descendants.
+# `ntvcm` is a child of the shell launched below; targeting the PID tree avoids
+# terminating an unrelated emulator that may be running outside this suite.
+kill_tree() {
+    _signal="$1"; _pid="$2"
+    if _children=$(pgrep -P "$_pid" 2>/dev/null); then
+        for _child in $_children; do
+            kill_tree "$_signal" "$_child"
+        done
+    fi
+    kill "$_signal" "$_pid" 2>/dev/null
+}
+
 # run_one <script> <outfile> : run the test, capturing combined output to
 # <outfile>.  Returns 0 if the test finished on its own, 124 if it was killed
 # for exceeding TEST_TIMEOUT.  Called from an `if` so `set -e` is suspended
-# inside it (the kill/pkill nonzero exits must not abort the suite).
+# inside it (a child can exit before the terminating signal is delivered).
 run_one() {
     _script="$1"; _out="$2"
+    _name=$(basename "$_script")
+    _limit=$TEST_TIMEOUT
+    case "$_name" in
+        stdlib_coverage.sh) _limit=60 ;;
+    esac
     : > "$_out"
     sh "$_script" > "$_out" 2>&1 &
     _spid=$!
     _elapsed=0
     while kill -0 "$_spid" 2>/dev/null; do
-        if [ "$_elapsed" -ge "$TEST_TIMEOUT" ]; then
-            pkill -x ntvcm 2>/dev/null
-            kill "$_spid" 2>/dev/null
+        if [ "$_elapsed" -ge "$_limit" ]; then
+            kill_tree -TERM "$_spid"
             sleep 1
-            kill -9 "$_spid" 2>/dev/null
+            if kill -0 "$_spid" 2>/dev/null; then
+                kill_tree -KILL "$_spid"
+            fi
             wait "$_spid" 2>/dev/null
             return 124
         fi

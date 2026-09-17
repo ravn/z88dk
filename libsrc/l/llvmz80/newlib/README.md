@@ -17,8 +17,8 @@ those to real clang attributes **only under `__LLVMZ80`** (verified 2026-07-25):
 | z88dk decoration   | clang attribute (via compiler.h) | ABI |
 |--------------------|----------------------------------|-----|
 | `__smallc`         | `sdcccall(0)`                    | stack args, **caller**-clean, i16 return in **HL** |
-| `__z88dk_callee`   | `z80_callee`                     | stack args, **callee**-clean |
-| `__z88dk_fastcall` | `z80_fastcall`                   | one arg in L / HL / DE:HL by width; return in the same |
+| `__z88dk_callee`   | `z88dk_callee`                   | stack args, **callee**-clean |
+| `__z88dk_fastcall` | `z88dk_fastcall`                 | one arg in L / HL / DE:HL by width; return in the same |
 | `__vasmallc`       | `__smallc` (→ sdcccall(0))       | variadic; return count in HL |
 
 **If this mapping is absent the attributes are no-ops and clang falls back to its
@@ -33,7 +33,7 @@ comparator scrambles the array). So: never gate this on bare `__clang__`
 The newlib headers route the plain names to the native register/callee variants,
 e.g. `#define memcpy(a,b,c) memcpy_callee(a,b,c)`,
 `#define strlen(a) strlen_fastcall(a)` (fastcall). Because clang matches
-`z80_callee`/`z80_fastcall` exactly, it calls those workers **directly**.
+`z88dk_callee`/`z88dk_fastcall` exactly, it calls those workers **directly**.
 Verified (emitted asm, 2026-07-25): a `memcpy`/`strlen` TU emits
 `call _memcpy_callee` and `call _strlen_fastcall` with **zero** `ex de,hl`
 adapter modules. Contrast classic, which needs the hand-written
