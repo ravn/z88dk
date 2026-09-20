@@ -9,7 +9,7 @@ int main(void) {
     // longjmp.  Per C a `volatile` local so used MUST hold its last stored
     // value after the longjmp-induced second return (a non-volatile local
     // would be indeterminate there).  This pins the return-twice robustness
-    // of the llvmz80 lowering: with +static-stack the local is memory-
+    // of the llvmz80 lowering: with +static-frame the local is memory-
     // resident and must be reloaded, not cached in a register that longjmp's
     // IX/IY/SP restore would revert.  Verified identical on classic /
     // newlib_iy / newlib_ix.

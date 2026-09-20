@@ -35,7 +35,7 @@ NTVCM   ?= ntvcm
 BR       := ../../../../libsrc/l/llvmz80
 MATH32   := ../../../../libsrc
 BRIDGES  := $(BR)/__addsf3.asm $(BR)/__cmpsf2.asm $(BR)/__floatsisf.asm
-FLOAT    := -mllvm -z80-float-sdcccall0 --math32 -L$(MATH32)
+FLOAT    := -mllvm -z80-float-sdcccall0 -Cg-mdouble=32 --math32 -L$(MATH32)
 
 Q=@
 ifeq ($V,1)

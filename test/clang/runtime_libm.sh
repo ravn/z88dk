@@ -31,7 +31,7 @@ trap 'rm -rf "$WORK"' EXIT
 fail() { echo "FAIL: $1"; exit 1; }
 
 if ! zcc +cpm -compiler=llvmz80 ${ZCC_CLIB:-} -O3 -create-app \
-	-mllvm -z80-float-sdcccall0 --math32 -L"$MATH32_DIR" \
+	-mllvm -z80-float-sdcccall0 -Cg-mdouble=32 --math32 -L"$MATH32_DIR" \
 	"$L/__addsf3.asm" "$L/__cmpsf2.asm" "$L/__floatsisf.asm" \
 	-o "$WORK/rt" "$SRC" >"$WORK/build.log" 2>&1; then
 	echo "--- build log ---"; cat "$WORK/build.log"
