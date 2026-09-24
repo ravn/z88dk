@@ -31,11 +31,11 @@ if ! zcc +cpm -compiler=llvmz80 ${ZCC_CLIB:-} -O2 -create-app \
 	echo "--- build log ---"; cat "$WORK/build.log"
 	fail "zcc build failed"
 fi
-[ -f "$WORK/rt.com" ] || fail "no .com produced"
+[ -f "$WORK/RT.COM" ] || fail "no .com produced"
 
 # A broken fflush loops forever; ntvcm exits on its own on a clean run, but
 # guard against a hang if the fix regresses.
-OUT=$("$NTVCM" "$WORK/rt.com" 2>/dev/null | tr -d '\r')
+OUT=$("$NTVCM" "$WORK/RT.COM" 2>/dev/null | tr -d '\r')
 
 #   atoi("123") -> 123 ; atoi("-45") -> -45 ; malloc/free cycle ok -> 1
 EXP='stdlib 123 -45 1'

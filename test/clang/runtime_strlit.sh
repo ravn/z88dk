@@ -34,9 +34,9 @@ if ! zcc +cpm -compiler=llvmz80 ${ZCC_CLIB:-} -O1 -create-app -o "$WORK/rt" "$SR
 	echo "--- build log ---"; cat "$WORK/build.log"
 	fail "zcc build failed"
 fi
-[ -f "$WORK/rt.com" ] || fail "no .com produced"
+[ -f "$WORK/RT.COM" ] || fail "no .com produced"
 
-OUT=$("$NTVCM" "$WORK/rt.com" 2>/dev/null | tr -d '\r')
+OUT=$("$NTVCM" "$WORK/RT.COM" 2>/dev/null | tr -d '\r')
 
 # fn="file.txt" ver="1.2.3" pi="3.14159" buf="a.b.c" ok=1
 EXP='strlit file.txt 1.2.3 3.14159 a.b.c 1'

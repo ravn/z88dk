@@ -34,7 +34,7 @@ if ! zcc +cpm -compiler=llvmz80 ${ZCC_CLIB:-} -O2 -create-app \
 	echo "--- build log ---"; cat "$WORK/build.log"
 	fail "zcc build failed (pre-fix: undefined symbol: _heap from __calloc.asm)"
 fi
-[ -f "$WORK/rt.com" ] || fail "no .com produced"
+[ -f "$WORK/RT.COM" ] || fail "no .com produced"
 
 # Link-level proof: calloc must route to calloc_callee, not the __calloc bridge.
 grep -q "_calloc_callee" "$WORK/rt.map" || fail "calloc_callee not linked"
@@ -42,7 +42,7 @@ if grep -q "___calloc" "$WORK/rt.map"; then
 	fail "___calloc (the removed __calloc.asm bridge) is still linked"
 fi
 
-OUT=$("$NTVCM" "$WORK/rt.com" 2>/dev/null | tr -d '\r')
+OUT=$("$NTVCM" "$WORK/RT.COM" 2>/dev/null | tr -d '\r')
 
 # 5 zeroed ints sum to 0; cell 2 written = 42.
 EXP='calloc 0 42'

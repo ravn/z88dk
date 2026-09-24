@@ -28,9 +28,9 @@ if ! zcc +cpm -compiler=sdcc --math32 -O2 \
     echo "--- build log ---"; cat "$WORK/build.log"
     echo "FAIL: zsdcc build failed"; exit 1
 fi
-[ -f "$WORK/rt.com" ] || { echo "SKIP: sdcc produced no .com (lane unavailable)"; exit 0; }
+[ -f "$WORK/RT.COM" ] || { echo "SKIP: sdcc produced no .com (lane unavailable)"; exit 0; }
 
-OUT=$("$NTVCM" "$WORK/rt.com" 2>/dev/null | tr -d '\r')
+OUT=$("$NTVCM" "$WORK/RT.COM" 2>/dev/null | tr -d '\r')
 echo "$OUT" | grep -qF "PASS autoformat" \
     || { echo "FAIL: zsdcc auto-selection wrong. got: [$OUT]"; exit 1; }
 

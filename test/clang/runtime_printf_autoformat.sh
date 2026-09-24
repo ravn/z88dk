@@ -29,9 +29,9 @@ if ! zcc +cpm -compiler=llvmz80 --math32 -O2 \
     echo "--- build log ---"; cat "$WORK/build.log"
     fail "zcc build failed"
 fi
-[ -f "$WORK/rt.com" ] || fail "no .com produced"
+[ -f "$WORK/RT.COM" ] || fail "no .com produced"
 
-OUT=$("$NTVCM" "$WORK/rt.com" 2>/dev/null | tr -d '\r')
+OUT=$("$NTVCM" "$WORK/RT.COM" 2>/dev/null | tr -d '\r')
 echo "$OUT" | grep -qF "PASS autoformat" \
     || fail "auto-selection wrong (float not linked?). got: [$OUT]"
 
