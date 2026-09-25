@@ -11,7 +11,7 @@ fail() { echo "FAIL: $1"; exit 1; }
 if ! zcc +cpm -compiler=llvmz80 ${ZCC_CLIB:-} -O2 -create-app -o "$WORK/rt" "$SRC" >"$WORK/build.log" 2>&1; then
     echo "--- build log ---"; cat "$WORK/build.log"; fail "zcc build failed"
 fi
-OUT=$("$NTVCM" "$WORK/rt.com" 2>/dev/null | head -1 | tr -d '\r')
+OUT=$("$NTVCM" "$WORK/RT.COM" 2>/dev/null | head -1 | tr -d '\r')
 EXPECT="q=1003 r=12 uq=32399 ur=116657"
 if [ "$OUT" = "$EXPECT" ]; then
     echo "PASS: runtime_long"

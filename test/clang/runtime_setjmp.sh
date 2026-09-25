@@ -37,9 +37,9 @@ if ! zcc +cpm -compiler=llvmz80 ${ZCC_CLIB:-} -O1 -create-app \
 	echo "--- build log ---"; cat "$WORK/build.log"
 	fail "zcc build failed"
 fi
-[ -f "$WORK/rt.com" ] || fail "no .com produced"
+[ -f "$WORK/RT.COM" ] || fail "no .com produced"
 
-OUT=$("$NTVCM" -m:80 "$WORK/rt.com" 2>/dev/null | tr -d '\r')
+OUT=$("$NTVCM" -m:80 "$WORK/RT.COM" 2>/dev/null | tr -d '\r')
 
 echo "$OUT" | grep -qF "A_SETJMP0" || fail "setjmp() did not return 0 on direct call. got: [$OUT]"
 echo "$OUT" | grep -qF "B_AFTER_LONGJMP stage=1 rv=7 vloc=111" || fail "longjmp() did not resume correctly (expected stage=1 rv=7 vloc=111). got: [$OUT]"

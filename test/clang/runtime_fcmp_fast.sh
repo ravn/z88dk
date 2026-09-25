@@ -41,9 +41,9 @@ if ! zcc +cpm -compiler=llvmz80 ${ZCC_CLIB:-} -O2 -ffast-math -create-app \
 	echo "--- build log ---"; cat "$WORK/build.log"
 	fail "zcc build failed (expected if ___cmpsf2_fast is missing from the bridge)"
 fi
-[ -f "$WORK/rt.com" ] || fail "no .com produced"
+[ -f "$WORK/RT.COM" ] || fail "no .com produced"
 
-OUT=$("$NTVCM" "$WORK/rt.com" 2>/dev/null | tr -d '\r')
+OUT=$("$NTVCM" "$WORK/RT.COM" 2>/dev/null | tr -d '\r')
 
 echo "$OUT" | grep -qF "ALL PASS" || fail "fast-math compare output wrong. got: [$OUT]"
 

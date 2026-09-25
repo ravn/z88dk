@@ -28,7 +28,7 @@ if ! zcc +cpm -compiler=llvmz80 ${ZCC_CLIB:-} -O2 -create-app -o "$WORK/rt" "$SR
     fail "build failed"
 fi
 
-OUT=$("$NTVCM" "$WORK/rt.com" 2>/dev/null | head -1 | tr -d '\r')
+OUT=$("$NTVCM" "$WORK/RT.COM" 2>/dev/null | head -1 | tr -d '\r')
 EXPECT="str3 si=0 rs=4 rsnf=-1 [hello] r1=5 [he] r2=5"
 
 if [ "$OUT" = "$EXPECT" ]; then

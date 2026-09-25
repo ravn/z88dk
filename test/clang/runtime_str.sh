@@ -30,10 +30,10 @@ if ! zcc +cpm -compiler=llvmz80 ${ZCC_CLIB:-} -O2 -create-app -o "$WORK/rt" "$SR
 	echo "--- build log ---"; cat "$WORK/build.log"
 	fail "zcc build failed"
 fi
-[ -f "$WORK/rt.com" ] || fail "no .com produced"
+[ -f "$WORK/RT.COM" ] || fail "no .com produced"
 
 # ntvcm can hang if a bridge ABI is wrong; the exact match below catches it.
-OUT=$("$NTVCM" "$WORK/rt.com" 2>/dev/null | tr -d '\r')
+OUT=$("$NTVCM" "$WORK/RT.COM" 2>/dev/null | tr -d '\r')
 
 #   strcpy(b,"Hello"); strcat(b,"!")   -> "Hello!", both rets == b -> 1 1
 #   strncpy(nb,"XYZ",3) into "......."  -> "XYZ....", ret == nb   -> 1

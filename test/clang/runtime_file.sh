@@ -29,7 +29,7 @@ if ! zcc +cpm -O2 $HEAP -create-app -o "$WORK/odir/oracle" "$SRC" \
         >"$WORK/o.log" 2>&1; then
     echo "SKIP: oracle (sccz80) build failed"; cat "$WORK/o.log"; exit 0
 fi
-EXPECTED=$(cd "$WORK/odir" && ntvcm_run oracle.com | tr -d '\r') || true
+EXPECTED=$(cd "$WORK/odir" && ntvcm_run ORACLE.COM | tr -d '\r') || true
 
 # -- under test: llvmz80 --
 mkdir -p "$WORK/rtdir"
@@ -40,7 +40,7 @@ if ! zcc +cpm -compiler=llvmz80 ${ZCC_CLIB:-} -O2 $HEAP \
         *) cat "$WORK/rt.log"; fail "llvmz80 build failed" ;;
     esac
 fi
-ACTUAL=$(cd "$WORK/rtdir" && ntvcm_run rt.com | tr -d '\r') || true
+ACTUAL=$(cd "$WORK/rtdir" && ntvcm_run RT.COM | tr -d '\r') || true
 
 if [ "$ACTUAL" = "$EXPECTED" ]; then
     echo "PASS: fopen/fputs/fgets text round-trip (got [$ACTUAL])"

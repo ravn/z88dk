@@ -36,11 +36,11 @@ if ! zcc +cpm -compiler=llvmz80 ${ZCC_CLIB:-} -O2 \
 	echo "--- build log ---"; cat "$WORK/build.log"
 	fail "zcc build failed"
 fi
-[ -f "$WORK/rt.com" ] || fail "no .com produced"
+[ -f "$WORK/RT.COM" ] || fail "no .com produced"
 
 # Run from WORK so the created file (and any misrouted output) stays contained.
 # A wrong stdio/file interaction can hang; cap the run so a hang reports as FAIL.
-OUT=$(cd "$WORK" && "$NTVCM" rt.com 2>/dev/null | tr -d '\r')
+OUT=$(cd "$WORK" && "$NTVCM" RT.COM 2>/dev/null | tr -d '\r')
 
 echo "$OUT" | grep -qx "BEFORE" || fail "missing BEFORE (console broken before fopen). got: [$OUT]"
 

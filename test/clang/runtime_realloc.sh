@@ -36,7 +36,7 @@ if ! zcc +cpm -compiler=llvmz80 ${ZCC_CLIB:-} -O2 -create-app \
 	echo "--- build log ---"; cat "$WORK/build.log"
 	fail "zcc build failed"
 fi
-[ -f "$WORK/rt.com" ] || fail "no .com produced"
+[ -f "$WORK/RT.COM" ] || fail "no .com produced"
 
 # Link-level proof: realloc must route to realloc_callee, not the classic
 # CALLER-linkage ___realloc entry.
@@ -45,7 +45,7 @@ if grep -q "___realloc" "$WORK/rt.map"; then
 	fail "___realloc (the reversed-arg __ZPROTO/CALLER entry) is still linked"
 fi
 
-OUT=$("$NTVCM" "$WORK/rt.com" 2>/dev/null | tr -d '\r')
+OUT=$("$NTVCM" "$WORK/RT.COM" 2>/dev/null | tr -d '\r')
 
 EXP='realloc 1 16'
 echo "$OUT" | grep -qF "$EXP" || fail "realloc output wrong. got: [$OUT] want: [$EXP]"

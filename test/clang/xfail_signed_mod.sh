@@ -23,7 +23,7 @@ if ! zcc +cpm -compiler=llvmz80 ${ZCC_CLIB:-} -O2 -create-app -o "$WORK/rt" "$SR
     exit 0
 fi
 
-OUT=$("$NTVCM" "$WORK/rt.com" 2>/dev/null | tr -d '\r')
+OUT=$("$NTVCM" "$WORK/RT.COM" 2>/dev/null | tr -d '\r')
 val=$(printf '%s\n' "$OUT" | sed -n 's/^s16mod=//p')
 
 case "$val" in
