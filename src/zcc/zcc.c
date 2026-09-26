@@ -196,7 +196,6 @@ static void            configure_maths_library(char **libstring);
 
 static void            apply_copt_rules(int filenumber, int num, char **rules, char *ext1, char *ext2, char *ext);
 static void            zsdcc_asm_filter_comments(int filenumber, char *ext);
-static void            llvmz80_postprocess(int filenumber, char *inext, char *outext);
 static void            ez80clang_fix_db_strings(int filenumber, char *ext);
 static void            zsdcc_asm_filter_sections(int filenumber, char* ext);
 static void            zsdcc_embed_adb(int filenumber);
@@ -472,8 +471,8 @@ static arg_t  config[] = {
     { "COPTRULESINLINE", 0, SetStringConfig, &c_coptrules_sccz80, NULL, "Optimisation file for inlining sccz80 ops", "\"DESTDIR/lib/z80rules.8\"" },
     { "COPTRULESTARGET", 0, SetStringConfig, &c_coptrules_target, NULL, "Optimisation file for target specific operations",NULL },
     { "EZ80CLANGRULES", 0, SetStringConfig, &c_ez80clang_opt, NULL, "Rules for ez80 clang", "DESTDIR/lib/clang_rules.1"},
-    { "LLVMZ80RULES", 0, SetStringConfig, &c_llvmz80_opt, NULL, "copt rules for ravn/llvm-z80 clang", "DESTDIR/lib/llvmz80/llvmz80_rules.1"},
-    { "LLVMZ80POSTPROC", 0, SetStringConfig, &c_llvmz80_postproc, NULL, "Post-copt bridge script for ravn/llvm-z80 clang", "DESTDIR/lib/llvmz80/bridge_postproc.sh"},
+    { "LLVMZ80RULES", AF_DEPRECATED, SetStringConfig, &c_llvmz80_opt, NULL, "copt rules for ravn/llvm-z80 clang (obsolete)", NULL },
+    { "LLVMZ80POSTPROC", AF_DEPRECATED, SetStringConfig, &c_llvmz80_postproc, NULL, "Post-copt bridge script for ravn/llvm-z80 clang (obsolete)", NULL },
     { "LLVMZ80FMATH", 0, SetStringConfig, &c_llvmz80_fmath, NULL, "f32 math32 bridge archive for ravn/llvm-z80 clang (full path, no .lib suffix)", "DESTDIR/libsrc/l/llvmz80/llvmz80_fmath"},
     { "80CCRULES", 0, SetStringConfig, &c_80cc_opt, NULL, "Options for 80cc", "DESTDIR/lib/80cc_rules.1"},
     { "XCCRULES", 0, SetStringConfig, &c_xcc_opt, NULL, "Options for xcc", "DESTDIR/lib/xcc_rules.1"},
@@ -1460,13 +1459,15 @@ int main(int argc, char **argv)
                     compiler_arg = strdup(comparg);
                 }
 
-                if (process(".i", ".opt", c_compiler, compiler_arg, compiler_style, i, YES, NO)) {
+                if (process(".i", (compiler_type == CC_LLVMZ80) ? ".asm" : ".opt", c_compiler, compiler_arg, compiler_style, i, YES, NO)) {
                     exit(1);
                 }
                 free(compiler_arg);
             }
         case OPTFILE:
             if (m4only || preprocessonly || dependencyonly) continue;
+            if (compiler_type == CC_LLVMZ80)
+                goto CASE_ASMFILE;
             if (compiler_type == CC_SDCC) {
                 char  *rules[MAX_COPT_RULE_FILES];
                 int    num_rules = 0;
@@ -1539,11 +1540,6 @@ int main(int argc, char **argv)
                 rules[num_rules++] = c_ez80clang_opt;
 
                 apply_copt_rules(i, num_rules, rules, ".op1", ".op2", ".asm");
-            } else if ( compiler_type == CC_LLVMZ80) {
-                /* The clang GNU-as dialect needs copt PLUS two filters copt
-                 * cannot express (dot-labels, extern header); the whole chain
-                 * lives in bridge_postproc.sh.  See llvmz80_postprocess(). */
-                llvmz80_postprocess(i, ".opt", ".asm");
             } else if (compiler_type == CC_XCC) {
                 char  *rules[MAX_COPT_RULE_FILES];
                 int    num_rules = 0;
@@ -1977,50 +1973,6 @@ static void zsdcc_embed_adb(int filenumber)
 
 
 /* filter comments out of asz80 asm file see issue #801 on github */
-/* -compiler=llvmz80 post-compile bridge.  The compile step leaves raw
- * ravn/llvm-z80 clang assembly (GNU-as dialect) in <inext>; run it through
- * bridge_postproc.sh (z88dk-copt + fixlabels.pl + extern-header awk) to
- * produce z80asm in <outext>.  Done as a direct system() (not process())
- * because the helpers -- copt, perl, awk -- are not all in the z88dk bin
- * dir, so the bin_dir-prefixing process() styles do not fit. */
-static void llvmz80_postprocess(int filenumber, char *inext, char *outext)
-{
-    char *inname;
-    char *outname;
-    char  cmd[FILENAME_MAX * 4];
-    char *cpuarg;
-
-    inname  = filelist[filenumber];
-    outname = changesuffix(temporary_filenames[filenumber], outext);
-
-    if (!hassuffix(inname, inext)) {
-        free(outname);
-        return;
-    }
-
-    cpuarg = select_cpu(CPU_MAP_TOOL_COPT);
-
-    snprintf(cmd, sizeof(cmd),
-             "sh \"%s\" \"%s%s\" \"%s\" \"%s\" < \"%s\" > \"%s\"",
-             c_llvmz80_postproc,
-             c_binary_dir, c_copt_exe,
-             cpuarg ? cpuarg : "",
-             c_llvmz80_opt,
-             inname, outname);
-
-    if (verbose) {
-        fprintf(stderr, "%s\n", cmd);
-        fflush(stderr);
-    }
-
-    if (system(cmd) != 0) {
-        fprintf(stderr, "Error: llvm-z80 bridge post-processing failed\n");
-        exit(1);
-    }
-
-    free(filelist[filenumber]);
-    filelist[filenumber] = outname;
-}
 
 /* -compiler=ez80clang workaround for a CE-Programming/llvm-project asm-printer
  * bug (ravn/z88dk#19): ez80-clang's `db "..."` string directives for byte
@@ -3535,12 +3487,13 @@ static void configure_compiler(void)
         compiler_style = filter_outspecified_flag;
         c_stylecpp = filter_out;
     } else if (strcmp(c_compiler_type,"llvmz80") == 0 ) {
-        /* ravn/llvm-z80 GlobalISel clang, linked against z88dk's CP/M clib
-         * via the copt bridge (bridge_postproc.sh runs in the OPTFILE stage;
-         * see llvmz80_postprocess()).  We drive the clang *driver* (not -cc1)
-         * with --target=z80, so both the preprocess and compile steps use the
-         * filter_out iostyle: it omits the z88dk bin-dir prefix (our clang is
-         * an absolute/PATH binary, not a z88dk tool) and pipes via stdio. */
+        /* ravn/llvm-z80 GlobalISel clang, linked against z88dk's CP/M clib.
+         * Clang emits native z80asm assembly directly via -z80-asm-format=z80asm
+         * (no copt or post-process bridge needed).  We drive the clang *driver*
+         * (not -cc1) with --target=z80, so both the preprocess and compile
+         * steps use the filter_out iostyle: it omits the z88dk bin-dir prefix
+         * (our clang is an absolute/PATH binary, not a z88dk tool) and pipes
+         * via stdio directly to the .asm output file. */
         preprocarg = " -E -D__CLANG -D__LLVMZ80 --target=z80 -std=gnu23";
         BuildOptions(&cpparg, preprocarg);
 
@@ -3591,7 +3544,7 @@ static void configure_compiler(void)
              * options are appended after this buf and clang takes the LAST of
              * -ffreestanding/-fhosted, that override wins with no rebuild. */
             snprintf(buf, sizeof(buf),
-                     "--target=z80 -S -std=gnu23 -o - %s",
+                     "--target=z80 -S -mdouble=32 -std=gnu23 -o - %s",
                      optflag);
         }
         add_option_to_compiler(buf);
@@ -3625,13 +3578,13 @@ static void configure_compiler(void)
          * clib bridge, never a standalone ELF/compiler-rt target). */
         add_option_to_compiler("-mllvm -z80-classic-libc-cc");
 
-        /* Split 64-bit .quad data directives into two 32-bit .long halves
-         * (ravn/llvm-z80 #368).  z88dk's assembler has no 8-byte directive
-         * (DEFQ is 4 bytes), so a bare .quad for a long long global causes a
-         * syntax error.  This flag makes clang emit two .long halves in
-         * little-endian order instead, which copt's .long->DEFQ rule handles
-         * correctly.  Always required on the z88dk bridge path. */
-        add_option_to_compiler("-mllvm -z80-split-quad-directive");
+        /* Direct z80asm assembly output format (ravn/llvm-z80 pr-asm-format-z80asm).
+         * Generates z80asm dialect assembly directly from Clang: SECTION directives
+         * (code_compiler, data_compiler, bss_compiler, rodata_compiler), GLOBAL
+         * visibility, DEFB/DEFW/DEFQ/DEFS/DEFM directives, 64-bit values decomposed
+         * into two 32-bit DEFQ halves, and dotless symbol and label names (dots in
+         * identifiers are forbidden by z80asm). */
+        add_option_to_compiler("-mllvm -z80-asm-format=z80asm");
 
         if (clangarg) {
             add_option_to_compiler(clangarg);
