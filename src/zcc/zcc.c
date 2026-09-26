@@ -3591,7 +3591,7 @@ static void configure_compiler(void)
              * options are appended after this buf and clang takes the LAST of
              * -ffreestanding/-fhosted, that override wins with no rebuild. */
             snprintf(buf, sizeof(buf),
-                     "--target=z80 -S -std=gnu23 -o - %s",
+                     "--target=z80 -S -mdouble=32 -std=gnu23 -o - %s",
                      optflag);
         }
         add_option_to_compiler(buf);
@@ -3624,6 +3624,14 @@ static void configure_compiler(void)
          * correct ABI.  Always correct on this path (it is always the classic
          * clib bridge, never a standalone ELF/compiler-rt target). */
         add_option_to_compiler("-mllvm -z80-classic-libc-cc");
+
+        /* Direct z80asm assembly output format (ravn/llvm-z80 pr-asm-format-z80asm).
+         * Generates z80asm dialect assembly directly from Clang: SECTION directives
+         * (code_compiler, data_compiler, bss_compiler, rodata_compiler), GLOBAL
+         * visibility, DEFB/DEFW/DEFQ/DEFS/DEFM directives, 64-bit values decomposed
+         * into two 32-bit DEFQ halves, and dotless symbol and label names (dots in
+         * identifiers are forbidden by z80asm). */
+        add_option_to_compiler("-mllvm -z80-asm-format=z80asm");
 
         if (clangarg) {
             add_option_to_compiler(clangarg);
