@@ -196,7 +196,6 @@ static void            configure_maths_library(char **libstring);
 
 static void            apply_copt_rules(int filenumber, int num, char **rules, char *ext1, char *ext2, char *ext);
 static void            zsdcc_asm_filter_comments(int filenumber, char *ext);
-static void            llvmz80_postprocess(int filenumber, char *inext, char *outext);
 static void            ez80clang_fix_db_strings(int filenumber, char *ext);
 static void            zsdcc_asm_filter_sections(int filenumber, char* ext);
 static void            zsdcc_embed_adb(int filenumber);
@@ -1460,13 +1459,15 @@ int main(int argc, char **argv)
                     compiler_arg = strdup(comparg);
                 }
 
-                if (process(".i", ".opt", c_compiler, compiler_arg, compiler_style, i, YES, NO)) {
+                if (process(".i", (compiler_type == CC_LLVMZ80) ? ".asm" : ".opt", c_compiler, compiler_arg, compiler_style, i, YES, NO)) {
                     exit(1);
                 }
                 free(compiler_arg);
             }
         case OPTFILE:
             if (m4only || preprocessonly || dependencyonly) continue;
+            if (compiler_type == CC_LLVMZ80)
+                goto CASE_ASMFILE;
             if (compiler_type == CC_SDCC) {
                 char  *rules[MAX_COPT_RULE_FILES];
                 int    num_rules = 0;
@@ -1539,11 +1540,6 @@ int main(int argc, char **argv)
                 rules[num_rules++] = c_ez80clang_opt;
 
                 apply_copt_rules(i, num_rules, rules, ".op1", ".op2", ".asm");
-            } else if ( compiler_type == CC_LLVMZ80) {
-                /* The clang GNU-as dialect needs copt PLUS two filters copt
-                 * cannot express (dot-labels, extern header); the whole chain
-                 * lives in bridge_postproc.sh.  See llvmz80_postprocess(). */
-                llvmz80_postprocess(i, ".opt", ".asm");
             } else if (compiler_type == CC_XCC) {
                 char  *rules[MAX_COPT_RULE_FILES];
                 int    num_rules = 0;
@@ -1977,50 +1973,6 @@ static void zsdcc_embed_adb(int filenumber)
 
 
 /* filter comments out of asz80 asm file see issue #801 on github */
-/* -compiler=llvmz80 post-compile bridge.  The compile step leaves raw
- * ravn/llvm-z80 clang assembly (GNU-as dialect) in <inext>; run it through
- * bridge_postproc.sh (z88dk-copt + fixlabels.pl + extern-header awk) to
- * produce z80asm in <outext>.  Done as a direct system() (not process())
- * because the helpers -- copt, perl, awk -- are not all in the z88dk bin
- * dir, so the bin_dir-prefixing process() styles do not fit. */
-static void llvmz80_postprocess(int filenumber, char *inext, char *outext)
-{
-    char *inname;
-    char *outname;
-    char  cmd[FILENAME_MAX * 4];
-    char *cpuarg;
-
-    inname  = filelist[filenumber];
-    outname = changesuffix(temporary_filenames[filenumber], outext);
-
-    if (!hassuffix(inname, inext)) {
-        free(outname);
-        return;
-    }
-
-    cpuarg = select_cpu(CPU_MAP_TOOL_COPT);
-
-    snprintf(cmd, sizeof(cmd),
-             "sh \"%s\" \"%s%s\" \"%s\" \"%s\" < \"%s\" > \"%s\"",
-             c_llvmz80_postproc,
-             c_binary_dir, c_copt_exe,
-             cpuarg ? cpuarg : "",
-             c_llvmz80_opt,
-             inname, outname);
-
-    if (verbose) {
-        fprintf(stderr, "%s\n", cmd);
-        fflush(stderr);
-    }
-
-    if (system(cmd) != 0) {
-        fprintf(stderr, "Error: llvm-z80 bridge post-processing failed\n");
-        exit(1);
-    }
-
-    free(filelist[filenumber]);
-    filelist[filenumber] = outname;
-}
 
 /* -compiler=ez80clang workaround for a CE-Programming/llvm-project asm-printer
  * bug (ravn/z88dk#19): ez80-clang's `db "..."` string directives for byte
@@ -3535,12 +3487,13 @@ static void configure_compiler(void)
         compiler_style = filter_outspecified_flag;
         c_stylecpp = filter_out;
     } else if (strcmp(c_compiler_type,"llvmz80") == 0 ) {
-        /* ravn/llvm-z80 GlobalISel clang, linked against z88dk's CP/M clib
-         * via the copt bridge (bridge_postproc.sh runs in the OPTFILE stage;
-         * see llvmz80_postprocess()).  We drive the clang *driver* (not -cc1)
-         * with --target=z80, so both the preprocess and compile steps use the
-         * filter_out iostyle: it omits the z88dk bin-dir prefix (our clang is
-         * an absolute/PATH binary, not a z88dk tool) and pipes via stdio. */
+        /* ravn/llvm-z80 GlobalISel clang, linked against z88dk's CP/M clib.
+         * Clang emits native z80asm assembly directly via -z80-asm-format=z80asm
+         * (no copt or post-process bridge needed).  We drive the clang *driver*
+         * (not -cc1) with --target=z80, so both the preprocess and compile
+         * steps use the filter_out iostyle: it omits the z88dk bin-dir prefix
+         * (our clang is an absolute/PATH binary, not a z88dk tool) and pipes
+         * via stdio directly to the .asm output file. */
         preprocarg = " -E -D__CLANG -D__LLVMZ80 --target=z80 -std=gnu23";
         BuildOptions(&cpparg, preprocarg);
 
