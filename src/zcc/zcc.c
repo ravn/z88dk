@@ -3625,14 +3625,6 @@ static void configure_compiler(void)
          * clib bridge, never a standalone ELF/compiler-rt target). */
         add_option_to_compiler("-mllvm -z80-classic-libc-cc");
 
-        /* Split 64-bit .quad data directives into two 32-bit .long halves
-         * (ravn/llvm-z80 #368).  z88dk's assembler has no 8-byte directive
-         * (DEFQ is 4 bytes), so a bare .quad for a long long global causes a
-         * syntax error.  This flag makes clang emit two .long halves in
-         * little-endian order instead, which copt's .long->DEFQ rule handles
-         * correctly.  Always required on the z88dk bridge path. */
-        add_option_to_compiler("-mllvm -z80-split-quad-directive");
-
         if (clangarg) {
             add_option_to_compiler(clangarg);
         }
