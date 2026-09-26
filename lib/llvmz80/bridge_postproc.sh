@@ -17,11 +17,13 @@
 #      this bridge), which copt's correct `.long -> DEFQ` (4-byte) rule lowers.
 #      The old external splitquad.pl pre-pass is therefore gone (requires a clang
 #      built with that MCAsmInfo change; see ravn/llvm-z80 quad-init-split-27.ll).
-#      A large `.ascii "..."` (any const byte array >= ~100 bytes, escaped) still
-#      overflows copt's own 512-char line buffer (copt.c MAXLINE) so its
-#      `.ascii -> DEFM` rule silently fails to match; splitascii.pl (stage 0)
-#      breaks any long `.ascii` line into several short ones on real byte
-#      boundaries before copt ever sees it.
+#      Long `.ascii`/`.asciz` lines are likewise split in the backend:
+#      ravn/llvm-z80's Z80MCAsmInfo sets MaxAsciiLength=48, so MCAsmStreamer
+#      already breaks any string or byte array into <=48-byte directives.
+#      The old external splitascii.pl pre-pass is therefore gone (ravn/llvm-z80#381).
+#   1. z88dk-copt <rules>   -- maps the bulk of the asm dialect: .text/.bss/
+#      .rodata -> SECTION *; .globl -> GLOBAL; .asciz/.short/.byte/.zero ->
+#      DEFM/DEFW/DEFB/DEFS; strips .file/.ident/.type/.size/.addrsig.
 #   2. fixlabels.pl         -- copt tokenises on whitespace, so it cannot
 #      rewrite labels containing dots (`.LBB0_4`, `L_.str.1`); perl does the
 #      dot->underscore / leading-dot-strip rewrite copt cannot express.
@@ -39,7 +41,7 @@ set -eu
 COPT=$1; CPUARG=$2; RULES=$3
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
-perl "$HERE/splitascii.pl" | "$COPT" "$CPUARG" "$RULES" | perl "$HERE/fixlabels.pl" | awk '
+"$COPT" "$CPUARG" "$RULES" | awk '
   /^[ \t]*\.local[ \t]/ { next }
   /^[ \t]*\.comm[ \t]/ {
     split($2,c,","); cn[++nc]=c[1]; cs[nc]=c[2]; def[c[1]]=1; next
@@ -58,7 +60,7 @@ perl "$HERE/splitascii.pl" | "$COPT" "$CPUARG" "$RULES" | perl "$HERE/fixlabels.
       print "\tSECTION bss_compiler"
       for(i=1;i<=nc;i++){ print cn[i] ":"; print "\tDEFS " cs[i] }
     }
-  }' | grep -v '__do_zero_bss' | grep -v 'Declaring this symbol'
+  }'
 # NOTE (ravn/llvm-z80#267, removed 2026-07-21): there used to be a final
 #   perl -pe 's/\bjr\s+(c|nc|z|nz|pe|po|p|m)\s*,/jp $1,/gi;'
 # stage here that rewrote every conditional `jr cc` -> `jp cc`.  It was a
