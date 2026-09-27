@@ -6,7 +6,7 @@
 
 #if __SCCZ80
 #define __ZPROTO2(r,p, n,t1,a1,t2,a2) extern r __LIB__ p n(t1 a1,t2 a2) __smallc;
-#elif __SDCC
+#elif __SDCC || defined(__LLVMZ80)
 #define __ZPROTO2(r,p, n,t1,a1,t2,a2) extern r p n(t1 a1,t2 a2) __smallc;
 #else
 #define __ZPROTO2(r,p, n,t1, a1,t2, a2) extern r p __##n  (t2 a2,t1 a1); \
@@ -20,7 +20,7 @@
 
 #if __SCCZ80
 #define __ZPROTO3(r,p, n,t1,a1,t2,a2,t3,a3) extern r __LIB__ p n(t1 a1,t2 a2, t3 a3) __smallc;
-#elif __SDCC
+#elif __SDCC || defined(__LLVMZ80)
 #define __ZPROTO3(r,p, n,t1,a1,t2,a2,t3,a3) extern r p n(t1 a1,t2 a2, t3 a3) __smallc;
 #else
 #define __ZPROTO3(r,p, n,t1,a1,t2,a2,t3,a3) extern r p __##n  (t3 a3, t2 a2,t1 a1); \
@@ -34,7 +34,7 @@
 
 #if __SCCZ80
 #define __ZPROTO4(r,p, n,t1,a1,t2,a2,t3,a3,t4,a4) extern r __LIB__ p n(t1 a1,t2 a2, t3 a3,t4 a4) __smallc;
-#elif __SDCC
+#elif __SDCC || defined(__LLVMZ80)
 #define __ZPROTO4(r,p, n,t1,a1,t2,a2,t3,a3,t4,a4) extern r p n(t1 a1,t2 a2, t3 a3, t4 a4) __smallc;
 #else
 #define __ZPROTO4(r,p, n,t1,a1,t2,a2,t3,a3,t4,a4) extern r p __##n  (t4 a4, t3 a3, t2 a2,t1 a1); \
@@ -48,7 +48,7 @@
 
 #if __SCCZ80
 #define __ZPROTO5(r,p, n,t1,a1,t2,a2,t3,a3,t4,a4,t5,a5) extern r __LIB__ p n(t1 a1,t2 a2, t3 a3,t4 a4,t5 a5) __smallc;
-#elif __SDCC
+#elif __SDCC || defined(__LLVMZ80)
 #define __ZPROTO5(r,p, n,t1,a1,t2,a2,t3,a3,t4,a4,t5,a5) extern r p n(t1 a1,t2 a2, t3 a3, t4 a4,t5 a5) __smallc;
 #else
 #define __ZPROTO5(r,p, n,t1,a1,t2,a2,t3,a3,t4,a4,t5,a5) extern r p __##n  (t5 a5, t4 a4, t3 a3, t2 a2,t1 a1); \
