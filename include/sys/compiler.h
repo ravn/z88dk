@@ -25,6 +25,7 @@
 #define __at(x)
 #define __sfr
 #define __vasmallc
+#define __runtime_library_callback
 
 #else
 
@@ -40,6 +41,14 @@
 #define __z88dk_deprecated
 #define __z88dk_sdccdecl
 
+// __runtime_library_callback: marks callbacks called from classic-lib code (e.g.
+// qsort/bsearch comparators). Clang pins sdcccall(0) (stack args, HL return) to match runtime.
+#define __runtime_library_callback
+
+#if __clang__ | __XCC
+#define __preserves_regs(x...)
+#endif
+
 #if __SDCC
 // __smallconly is for functions that only come in a smallc variant
 #define __smallconly __smallc
@@ -50,10 +59,22 @@
 
 // Make intellisense run easier..
 #if __clang__ | __CLANG | __XCC
+#if !defined(__LLVMZ80)
 #define __STDC_ABI_ONLY
 #define __smallc
 #define __z88dk_callee
 #define __z88dk_fastcall
+#else
+#define __smallc          __attribute__((smallc))
+#define __z88dk_callee    __attribute__((z88dk_callee))
+#define __z88dk_fastcall  __attribute__((z88dk_fastcall))
+#undef  __stdc
+#define __stdc            __attribute__((sdcccall(0)))
+#undef  __vasmallc
+#define __vasmallc        __attribute__((sdcccall(0)))
+#undef  __runtime_library_callback
+#define __runtime_library_callback __attribute__((sdcccall(0)))
+#endif
 #endif
 
 #else
@@ -62,6 +83,7 @@
 #define __smallconly __smallc
 #define __vasmallc __smallc
 #define __z88dk_deprecated
+#define __runtime_library_callback
 #endif
 
 #endif

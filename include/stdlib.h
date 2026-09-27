@@ -196,8 +196,8 @@ extern   int optreset;
 // One shared search/sort core.  sccz80 links the bare names (__LIB__), sdcc the
 // _-prefixed ones; each entry embeds its own comparator thunk, so a single
 // classic library serves both compilers (see classic/stdlib/{qsort,bsearch}.asm).
-extern void __LIB__   qsort(void *base, unsigned int nmemb, unsigned int size, int (*compar)(const void *, const void *)) __smallc;
-extern void __LIB__  *bsearch(void *key, void *base, unsigned int nmemb, unsigned int size, int (*compar)(const void *, const void *)) __smallc;
+extern void __LIB__   qsort(void *base, unsigned int nmemb, unsigned int size, int (*compar)(const void *, const void *) __runtime_library_callback) __smallc;
+extern void __LIB__  *bsearch(void *key, void *base, unsigned int nmemb, unsigned int size, int (*compar)(const void *, const void *) __runtime_library_callback) __smallc;
 
 // l_qsort()/l_bsearch() operate on arrays of 2-byte items (pointers/ints),
 // sharing the one core rather than a separate little implementation.
@@ -383,10 +383,10 @@ extern unsigned long __LIB__   extract_bits_callee(unsigned char *data, unsigned
 #endif
 
 // Compare a file name in "8.3" format to a wildcard expression
-__ZPROTO2(int,,wcmatch,char,*wildname,char *,filename)
+__ZPROTO2(int,,wcmatch,char *,wildname,char *,filename)
 
 // Convert a BCD encoded value to unsigned int
-extern unsigned int __LIB__ unbcd(unsigned int value);
+extern unsigned int __LIB__ unbcd(unsigned int value) __smallc;
 
 #ifdef __Z88__
 extern int system(const char *text);              /* should this be in the z88 library? */

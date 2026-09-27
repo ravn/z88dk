@@ -216,9 +216,9 @@ extern char __LIB__  *strdup_fastcall(const char *s)  __z88dk_fastcall;
 #endif
 
 
-extern char __LIB__  *strerror(char *s);
+extern char __LIB__  *strerror(int errnum);
 #ifndef __STDC_ABI_ONLY
-extern char __LIB__  *strerror_fastcall(char *s)  __z88dk_fastcall;
+extern char __LIB__  *strerror_fastcall(int errnum)  __z88dk_fastcall;
 #define strerror(x) strerror_fastcall(x)
 #endif
 
@@ -262,7 +262,7 @@ extern int __LIB__ strncasecmp_callee(const char *s1,const char *s2,size_t n) __
 #define strncasecmp(a,b,c) strncasecmp_callee(a,b,c)
 #endif
 
-__ZPROTO3(int,,strncat,char *,dst,const char *,src,size_t,n)
+__ZPROTO3(char,*,strncat,char *,dst,const char *,src,size_t,n)
 #if !__GBZ80 && !defined(__STDC_ABI_ONLY)
 extern char __LIB__ *strncat_callee(char *dst,const char *src,size_t n) __smallc __z88dk_callee;
 #define strncat(a,b,c) strncat_callee(a,b,c)

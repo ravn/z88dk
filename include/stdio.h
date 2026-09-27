@@ -221,8 +221,8 @@ extern FILE __LIB__ *funopen(const void     *cookie, int (*readfn)(void *, char 
                     fpos_t (*seekfn)(void *, fpos_t, int), int (*closefn)(void *)) __smallc;
 #endif
 
-extern int __LIB__  fclose(FILE *fp);
-extern int __LIB__  fflush(FILE *);
+extern int __LIB__  fclose(FILE *fp) __smallc;
+extern int __LIB__  fflush(FILE *) __smallc;
 
 extern void __LIB__ closeall(void);
 
@@ -234,7 +234,7 @@ extern void __LIB__ closeall(void);
 __ZPROTO3(char,*,fgets,char *,s,int,l,FILE *,fp)
 
 __ZPROTO2(int,,fputs,const char *,s,FILE *,fp)
-#ifndef __STDC_ABI_ONLY
+#if !defined(__STDC_ABI_ONLY) && !defined(__LLVMZ80)
 extern int __LIB__  fputs_callee(const char *s,  FILE *fp) __smallc __z88dk_callee;
 #define fputs(a,b)   fputs_callee(a,b)
 #endif
@@ -242,18 +242,18 @@ extern int __LIB__  fputs_callee(const char *s,  FILE *fp) __smallc __z88dk_call
 
 
 extern int __LIB__ fputc(int c, FILE *fp) __smallc;
-#ifndef __STDC_ABI_ONLY
+#if !defined(__STDC_ABI_ONLY) && !defined(__LLVMZ80)
 extern int __LIB__  fputc_callee(int c, FILE *fp) __smallc __z88dk_callee;
 #define fputc(a,b)   fputc_callee(a,b)
 #define putc(bp,fp) fputc_callee(bp,fp)
 #define putchar(bp) fputc_callee(bp,stdout)
 #else
 // clang expects putchar to be a library function not just a macro
-extern int putchar(int);
+extern int __LIB__ putchar(int) __smallc;
 #define putc(bp,fp) fputc(bp,fp)
 #endif
 
-extern int __LIB__ fgetc(FILE *fp);
+extern int __LIB__ fgetc(FILE *fp) __smallc;
 #define getc(f) fgetc(f)
 
 __ZPROTO2(int,,ungetc,int,c,FILE *,fp)
@@ -271,7 +271,7 @@ extern int __LIB__ ferror_fastcall(FILE *fp) __z88dk_fastcall;
 #define ferror(f) ferror_fastcall(f)
 #endif
 
-extern int __LIB__ puts(const char *);
+extern int __LIB__ puts(const char *) __smallc;
 
 #ifdef __STDC_ABI_ONLYe
 
@@ -280,7 +280,7 @@ extern int __LIB__ puts(const char *);
 
 
 /* Routines for file positioning */
-extern fpos_t __LIB__ ftell(FILE *fp);
+extern fpos_t __LIB__ ftell(FILE *fp) __smallc;
 __ZPROTO2(int,,fgetpos,FILE *,fp,fpos_t *, pos)
 
 
@@ -304,8 +304,8 @@ extern int __LIB__ printf(const char *fmt,...) __vasmallc;
 extern int __LIB__ fprintf(FILE *f,const char *fmt,...) __vasmallc;
 extern int __LIB__ sprintf(char *s,const char *fmt,...) __vasmallc;
 extern int __LIB__ snprintf(char *s,size_t n,const char *fmt,...) __vasmallc;
-extern int __LIB__ vfprintf(FILE *f,const char *fmt,void *ap);
-extern int __LIB__ vsnprintf(char *str, size_t n,const char *fmt,void *ap);
+extern int __LIB__ vfprintf(FILE *f,const char *fmt,void *ap) __vasmallc;
+extern int __LIB__ vsnprintf(char *str, size_t n,const char *fmt,void *ap) __vasmallc;
 
 #define vprintf(ctl,arg) vfprintf(stdout,ctl,arg)
 #define vsprintf(buf,ctl,arg) vsnprintf(buf,65535,ctl,arg)
@@ -331,8 +331,8 @@ extern void __LIB__ printn(int number, int radix,FILE *file) __smallc;
 extern int __LIB__ scanf(const char *fmt,...) __vasmallc;
 extern int __LIB__ fscanf(FILE *,const char *fmt,...) __vasmallc;
 extern int __LIB__ sscanf(char *,const char *fmt,...) __vasmallc;
-extern int __LIB__ vfscanf(FILE *, const char *fmt, void *ap); 
-extern int __LIB__ vsscanf(char *str, const char *fmt, void *ap);
+extern int __LIB__ vfscanf(FILE *, const char *fmt, void *ap) __vasmallc; 
+extern int __LIB__ vsscanf(char *str, const char *fmt, void *ap) __vasmallc;
 #define vscanf(ctl,arg) vfscanf(stdin,ctl,arg)
 
 
@@ -373,7 +373,7 @@ __ZPROTO2(int,,fdgetpos,int,fd,fpos_t *,pos)
 /* Rename a file */
 __ZPROTO2(int,,rename,const char *,s,const char *,d)
 /* Remove a file */
-extern int __LIB__ remove(const char *name);
+extern int __LIB__ remove(const char *name) __smallc;
 
 
 /* Scan for a keypress using the default keyboard driver */

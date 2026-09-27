@@ -16,11 +16,18 @@ static int fn_stdc(int a, int b) __stdc
     return a + b;
 }
 
-static int cmp_callback(const void *a, const void *b) __z88dk_callback
+static int cmp_callback(const void *a, const void *b) __runtime_library_callback
 {
     return *(const int *)a - *(const int *)b;
 }
 
+void test_calling_conventions(void)
+{
+    Assert(fn_smallc(10, 3) == 7, "fn_smallc(10, 3) == 7");
+    Assert(fn_stdc(10, 3) == 13, "fn_stdc(10, 3) == 13");
+}
+
+#if defined(__LLVMZ80)
 static int sum_varargs(int count, ...)
 {
     va_list ap;
@@ -34,17 +41,19 @@ static int sum_varargs(int count, ...)
     return s;
 }
 
-void test_calling_conventions(void)
-{
-    Assert(fn_smallc(10, 3) == 7, "fn_smallc(10, 3) == 7");
-    Assert(fn_stdc(10, 3) == 13, "fn_stdc(10, 3) == 13");
-}
-
 void test_varargs(void)
 {
     int s = sum_varargs(4, 10, 20, 30, 40);
     Assert(s == 100, "sum_varargs == 100");
 }
+#else
+void test_varargs(void)
+{
+    va_list ap;
+    (void)ap;
+    Assert(1, "stdarg types defined");
+}
+#endif
 
 void test_qsort_callback(void)
 {

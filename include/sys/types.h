@@ -29,12 +29,10 @@ typedef double double_t;
 
 #ifndef _FLOAT16_T
 #define _FLOAT16_T
-#ifndef __SCCZ80
-#ifndef __CLANG
+#if !defined(__SCCZ80) && !defined(__CLANG) && !defined(__clang__)
 typedef short _Float16;            /* IEEE-754 half float type */
 #endif
-#endif
-#ifndef __CLANG
+#if !defined(__CLANG) && !defined(__clang__)
 typedef _Float16 half_t;
 #endif
 #endif

@@ -21,8 +21,8 @@ typedef struct regexp {
 	char	program[1];	/* Unwarranted chumminess with compiler. */
 } regexp;
 
-extern regexp __LIB__ __SAVEFRAME__ *regcomp(char *);
-extern void __LIB__ __SAVEFRAME__ regerror(const char *);
+extern regexp __LIB__ __SAVEFRAME__ *regcomp(char *) __smallc;
+extern void __LIB__ __SAVEFRAME__ regerror(const char *) __smallc;
 
 #ifndef __STDC_ABI_ONLY
 extern int __LIB__ __SAVEFRAME__ regexec(regexp *__prog, char *__string) __smallc;
