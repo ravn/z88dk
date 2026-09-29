@@ -93,15 +93,14 @@ run_at() {
 }
 
 # zcc now passes its -O<n> straight through to clang (-O2 -> clang -O2, -O3 ->
-# clang -O3; --opt-code-size -> clang -Oz).  Each level emits a different set of
-# bridge names, so exercise all three for full coverage:
-#   -O2 (clang -O2)  : plain 16-bit cores + separate/fused 32-bit.
-#   -O3 (clang -O3)  : plain 16-bit cores + separate/fused 32-bit.
-#   --opt-code-size  : plain 16-bit cores + the 8-bit qi cores + fused 32-bit.
-run_at "-O2" ___divhi3 ___udivhi3 ___modhi3 ___umodhi3 ___mulhi3 ___divmodsi4 ___udivmodsi4 ___divsi3 ___modsi3 ___udivsi3 ___umodsi3 \
-	-- ___divhi3_fast ___udivhi3_fast ___modhi3_fast ___umodhi3_fast
-run_at "-O3" ___divhi3_fast ___udivhi3_fast ___modhi3_fast ___umodhi3_fast ___mulhi3 ___divmodsi4 ___udivmodsi4 ___divsi3 ___modsi3 ___udivsi3 ___umodsi3 \
-	-- ___divhi3 ___udivhi3 ___modhi3 ___umodhi3
-run_at "-O2 --opt-code-size" ___divhi3 ___udivhi3 ___modhi3 ___umodhi3 ___mulhi3 ___udivqi3 ___umodqi3 ___divmodsi4 ___udivmodsi4 ___divsi3 ___modsi3 ___udivsi3 ___umodsi3
+# clang -O3; --opt-code-size -> clang -Oz).  For the z88dk triple the backend
+# calls z88dk's l_* cores directly (no bridge wrappers):
+#   -O2/-O3         : l_divs/divu_16_16x16 + l_mulu_16_16x16 + 32-bit helpers.
+#   --opt-code-size : same 16-bit cores + 8-bit qi cores + 32-bit helpers.
+run_at "-O2" l_divs_16_16x16 l_divu_16_16x16 l_mulu_16_16x16 ___divmodsi4 ___udivmodsi4 ___divsi3 ___modsi3 ___udivsi3 ___umodsi3 \
+	-- ___divhi3 ___udivhi3 ___modhi3 ___umodhi3 ___mulhi3 ___divhi3_fast ___udivhi3_fast ___modhi3_fast ___umodhi3_fast
+run_at "-O3" l_divs_16_16x16 l_divu_16_16x16 l_mulu_16_16x16 ___divmodsi4 ___udivmodsi4 ___divsi3 ___modsi3 ___udivsi3 ___umodsi3 \
+	-- ___divhi3 ___udivhi3 ___modhi3 ___umodhi3 ___divhi3_fast ___udivhi3_fast ___modhi3_fast ___umodhi3_fast
+run_at "-O2 --opt-code-size" l_divs_16_16x16 l_divu_16_16x16 l_mulu_16_16x16 ___udivqi3 ___umodqi3 ___divmodsi4 ___udivmodsi4 ___divsi3 ___modsi3 ___udivsi3 ___umodsi3
 
-echo "PASS: llvmz80 integer runtime bridge (16/8/32-bit, fast + fused) links and computes correctly at -O2, -O3 and --opt-code-size"
+echo "PASS: llvmz80 integer runtime (16/8/32-bit) calls z88dk l_* cores directly and computes correctly at -O2, -O3 and --opt-code-size"
