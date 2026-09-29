@@ -1,8 +1,6 @@
 ${NEWLIB_ROOT}l/llvmz80/__divsi3.asm
 ${NEWLIB_ROOT}l/llvmz80/__mulsi3.asm
 ${NEWLIB_ROOT}l/llvmz80/__mulsi3_fast.asm
-${NEWLIB_ROOT}l/llvmz80/__memmove_rt.asm
-${NEWLIB_ROOT}l/llvmz80/__memset_builtin.asm
 ${NEWLIB_ROOT}l/llvmz80/__itoa.asm
 ${NEWLIB_ROOT}l/llvmz80/__strerror_table.asm
 ${NEWLIB_ROOT}l/llvmz80/__addsf3.asm
