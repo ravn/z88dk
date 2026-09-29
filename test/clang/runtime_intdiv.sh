@@ -97,11 +97,14 @@ run_at() {
 # calls z88dk's l_* cores directly (no bridge wrappers):
 #   -O2/-O3         : l_divs/divu_16_16x16 + l_mulu_16_16x16 + 32-bit helpers.
 #   --opt-code-size : same 16-bit cores + 8-bit qi cores + 32-bit helpers.
-run_at "-O2" l_divs_16_16x16 l_divu_16_16x16 l_mulu_16_16x16 ___divmodsi4 ___udivmodsi4 ___divsi3 ___modsi3 ___udivsi3 ___umodsi3 \
-	-- ___divhi3 ___udivhi3 ___modhi3 ___umodhi3 ___mulhi3 ___divhi3_fast ___udivhi3_fast ___modhi3_fast ___umodhi3_fast
-run_at "-O3" l_divs_16_16x16 l_divu_16_16x16 l_mulu_16_16x16 ___divmodsi4 ___udivmodsi4 ___divsi3 ___modsi3 ___udivsi3 ___umodsi3 \
-	-- ___divhi3 ___udivhi3 ___modhi3 ___umodhi3 ___divhi3_fast ___udivhi3_fast ___modhi3_fast ___umodhi3_fast
-run_at "-O2 --opt-code-size" l_divs_16_16x16 l_divu_16_16x16 l_mulu_16_16x16 l_fast_divu_8_8x8 ___divmodsi4 ___udivmodsi4 ___divsi3 ___modsi3 ___udivsi3 ___umodsi3 \
+run_at "-O2" l_divs_16_16x16 l_divu_16_16x16 l_mulu_16_16x16 l_divs_32_32x32 l_divu_32_32x32 \
+	-- ___divhi3 ___udivhi3 ___modhi3 ___umodhi3 ___mulhi3 ___divhi3_fast ___udivhi3_fast ___modhi3_fast ___umodhi3_fast \
+	   ___divmodsi4 ___udivmodsi4 ___divsi3 ___modsi3 ___udivsi3 ___umodsi3 ___mulsi3
+run_at "-O3" l_divs_16_16x16 l_divu_16_16x16 l_mulu_16_16x16 l_divs_32_32x32 l_divu_32_32x32 \
+	-- ___divhi3 ___udivhi3 ___modhi3 ___umodhi3 ___divhi3_fast ___udivhi3_fast ___modhi3_fast ___umodhi3_fast \
+	   ___divmodsi4 ___udivmodsi4 ___divsi3 ___modsi3 ___udivsi3 ___umodsi3 ___mulsi3
+run_at "-O2 --opt-code-size" l_divs_16_16x16 l_divu_16_16x16 l_mulu_16_16x16 l_fast_divu_8_8x8 l_divs_32_32x32 l_divu_32_32x32 \
+	-- ___divmodsi4 ___udivmodsi4 ___divsi3 ___modsi3 ___udivsi3 ___umodsi3 \
 	-- ___udivqi3 ___umodqi3
 
 echo "PASS: llvmz80 integer runtime (16/8/32-bit) calls z88dk l_* cores directly and computes correctly at -O2, -O3 and --opt-code-size"
