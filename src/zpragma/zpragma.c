@@ -323,9 +323,8 @@ static uint64_t parse_format_string(char *arg, CONVSPEC *specifiers)
             }
             fmt++;
         }
-        /* Unknown specifier: silently ignored — it may be a z88dk extension
-         * not in this table, or a C standard specifier added in a later
-         * standard.  Writing to stderr here would pollute every compilation. */
+        if (fmt->fmt == 0)
+            fprintf(stderr, "Ignoring unrecognized %s format specifier %%%c\n", (specifiers == printf_formats) ? "printf" : "scanf", *arg);
     }
 
     return format_option;
