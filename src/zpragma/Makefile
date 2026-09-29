@@ -17,7 +17,7 @@ CFLAGS		+= -Wall -std=gnu11 -MMD -pedantic \
 
 INSTALL 	?= install
 
-SRCS 		:= $(wildcard *.c) 
+SRCS 		:= $(filter-out test_%.c, $(wildcard *.c))
 
 OBJS_ALL	:= $(SRCS:.c=.o)
 OBJS		:= $(OBJS_ALL:$(PROJ).o=)
@@ -54,8 +54,8 @@ $(eval $(call MAKE_EXE,$(PROJ),$(OBJS_ALL),0))
 test:: test_scan_format$(EXESUFFIX)
 	./test_scan_format$(EXESUFFIX)
 
-test_scan_format$(EXESUFFIX): zpragma.c
-	$(CC) $(CFLAGS) -DZPRAGMA_TEST -o test_scan_format$(EXESUFFIX) zpragma.c
+test_scan_format$(EXESUFFIX): test_scan_format.c zpragma.c zpragma_internal.h
+	$(CC) $(CFLAGS) -DZPRAGMA_NO_MAIN -o test_scan_format$(EXESUFFIX) test_scan_format.c zpragma.c
 
 clean::
 	$(RM) $(OBJS) $(DEPENDS) test_scan_format$(EXESUFFIX)
