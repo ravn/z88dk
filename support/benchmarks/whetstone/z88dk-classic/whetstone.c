@@ -80,7 +80,7 @@ C**********************************************************************
 #endif
 
 #ifdef TIMER
-   #ifdef __80CC
+   #if defined(__80CC) || defined(__clang__)
       #define TIMER_START()       __asm__("TIMER_START:")
       #define TIMER_STOP()        __asm__("TIMER_STOP:")
    #else

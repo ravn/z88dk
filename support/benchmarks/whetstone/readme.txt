@@ -139,6 +139,7 @@ z88dk-classic/readme.txt.
 
 Compiler | CPU  | Library | Ticks           | KWIPS @ 4 MHz
 ---------|------|---------|-----------------|----------------
+llvmz80  | z80  | math32  | 272_160_765     | 14.6972  (Sep 30, 2026)
 sccz80   | z80  | math32  | 356_479_503     | 11.2208  (Sep 17, 2026)
 zsdcc    | z80  | math32  | 364_117_796     | 10.9855  (Sep 17, 2026)
 sccz80   | 8085 | math32  | 642_569_364   | 6.2250  (Sep 17, 2026)
@@ -359,3 +360,14 @@ cycle count  = 614748605
 time @ 4MHz  = 614748605 / 4x10^6 = 153.6871 seconds
 KWIPS        = 100*10*1 / 153.6871 = 6.5067
 MWIPS        = 6.5067 / 1000 = 0.0065067
+
+15.
+Z88DK September 30, 2026
+ravn/llvm-z80 clang (z80-unknown-none-z88dk), -SO3
+zcc +test -compiler=llvmz80 -SO3 --math32 -DTIMER -D__Z88DK
+IEEE 32-bit float (math32), 11792 bytes
+
+cycle count  = 272160765
+time @ 4MHz  = 272160765 / 4x10^6 = 68.040 seconds
+KWIPS        = 100*10*1 / 68.040 = 14.6972
+MWIPS        = 14.6972 / 1000 = 0.0146972
