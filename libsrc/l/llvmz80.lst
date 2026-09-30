@@ -1,1 +1,1 @@
-${NEWLIB_ROOT}l/llvmz80/__cmpsf2.asm
+../../../llvm-z80/compiler-rt/lib/builtins/z80/z80asm/cmpsf2.asm
