@@ -144,3 +144,19 @@ cycle count  = 356235065
 time @ 4MHz  = 356235065 / 4*10^6 = 89.0588 sec
 dhrystones/s = 20000 / 89.0588 = 224.5708
 DMIPS        = 224.5708 / 1757 = 0.1278
+
+7.
+Z88DK September 30, 2026
+ravn/llvm-z80 clang (z80-unknown-none-z88dk), -SO3
+zcc +test -compiler=llvmz80 -SO3 -DTIMER -D__Z88DK
+7710 bytes
+
+cycle count  = 172900060
+time @ 4MHz  = 172900060 / 4x10^6 = 43.225 seconds
+dhrystones/s = 20000 / 43.225 = 462.70
+DMIPS        = 462.70 / 1757 = 0.2633
+
+Note: a July 2026 measurement on the same compiler (-O2, intrinsic_label
+via copt rather than __asm__ barrier) gave 169220000 cycles / 0.2691 DMIPS.
+The ~2% difference is attributed to the __asm__("TIMER_START:") barrier
+suppressing optimizations across the timing boundary.
