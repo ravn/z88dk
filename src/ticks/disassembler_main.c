@@ -6,6 +6,7 @@
 #include <limits.h>
 #include "disassembler.h"
 #include "syms.h"
+#include "debug.h"
 #include "cpu.h"
 #include "backend.h"
 #include "ticks.h"
@@ -20,6 +21,51 @@ int  c_adl_mode = 0;
 char *c_target = NULL;
 int  inverted = 0;
 int  c_autolabel = 0;
+int  c_source = 0;   /* -c: annotate with C source lines */
+
+/* Simple source-file line cache. */
+#define SRC_CACHE_MAX 8
+static struct {
+    char   path[PATH_MAX];
+    char **lines;
+    int    count;
+} src_cache[SRC_CACHE_MAX];
+static int src_cache_size = 0;
+
+static const char *get_source_line(const char *filename, int lineno)
+{
+    int i;
+    for (i = 0; i < src_cache_size; i++) {
+        if (strcmp(src_cache[i].path, filename) == 0)
+            goto found;
+    }
+    /* Load the file. */
+    if (src_cache_size < SRC_CACHE_MAX) {
+        FILE *fp = fopen(filename, "r");
+        if (!fp) return NULL;
+        i = src_cache_size++;
+        strncpy(src_cache[i].path, filename, PATH_MAX - 1);
+        src_cache[i].path[PATH_MAX - 1] = '\0';
+        src_cache[i].lines = NULL;
+        src_cache[i].count = 0;
+        char line[1024];
+        while (fgets(line, sizeof(line), fp)) {
+            src_cache[i].lines = realloc(src_cache[i].lines,
+                                         (src_cache[i].count + 1) * sizeof(char *));
+            /* Strip trailing newline. */
+            size_t len = strlen(line);
+            while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r'))
+                line[--len] = '\0';
+            src_cache[i].lines[src_cache[i].count++] = strdup(line);
+        }
+        fclose(fp);
+    } else {
+        return NULL;
+    }
+found:
+    if (lineno < 1 || lineno > src_cache[i].count) return NULL;
+    return src_cache[i].lines[lineno - 1];
+}
 
 
 static void usage(char *program)
@@ -29,6 +75,7 @@ static void usage(char *program)
     printf("  +target        Enable extended disassembly for target\n");
     printf("  -x <file>      Symbol file to read\n");
     printf("                 Use before -o,-s,-e to enable symbols\n");
+    printf("  -c             Annotate disassembly with C source lines (requires -x)\n");
     printf("  -o <addr>      Address to load code to\n");
     printf("  -s <addr>      Address to start disassembling from\n");
     printf("  -e <addr>      Address to stop disassembling at\n\n");
@@ -100,6 +147,9 @@ int main(int argc, char **argv)
                 symbol_addr = symbol_resolve(argv[1], NULL);
                 end = (-1 == symbol_addr) ? strtol(argv[1], &endp, 0) : symbol_addr;
                 argc--; argv++;
+                break;
+            case 'c':
+                c_source = 1;
                 break;
             case 'i':
                 inverted = 255;
@@ -201,8 +251,23 @@ static void disassemble_loop(int start, int end)
 {
     static char buf[16384];
     int start2 = start;
+    const char *last_src_file = NULL;
+    int last_src_line = -1;
 
     while ( start2 < end ) {
+        if (c_source) {
+            const char *filename = NULL;
+            int lineno = 0;
+            if (debug_find_source_location(start2, &filename, &lineno) >= 0) {
+                if (filename != last_src_file || lineno != last_src_line) {
+                    const char *src = get_source_line(filename, lineno);
+                    if (src)
+                        printf("; %s:%d: %s\n", filename, lineno, src);
+                    last_src_file = filename;
+                    last_src_line = lineno;
+                }
+            }
+        }
         start2 += disassemble2(start2, buf, sizeof(buf), 0);
         if (!c_autolabel) {
             printf("%s\n",buf);
