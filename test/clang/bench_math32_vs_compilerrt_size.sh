@@ -13,10 +13,9 @@
 # division closure itself from fixed crt0/startup/config overhead that both
 # programs pay equally.
 #   math32 side:      real zcc pipeline (`+cpm -compiler=llvmz80
-#                      -mllvm -z80-float-sdcccall0 -lmath32`), linked
-#                      against ONLY __addsf3.asm (div routes through
-#                      ___divsf3 -> cm32_sdcc_fsdiv -> m32_fsdiv, per
-#                      MATH32_BRIDGE.md Sec 4); .com file size.
+#                      -L<libsrc> -lmath32`); its
+#                      --target=z80-unknown-none-z88dk lowering calls the
+#                      existing cm32_sdcc_fsdiv runtime entry; .com size.
 #   compiler-rt side:  standalone freestanding binary (no z88dk crt0),
 #                      linked against the prebuilt divsf3.o; .bin file size.
 # Both sides deliberately avoid any other float/int op (no (int) cast, no
@@ -27,37 +26,51 @@
 #        LLVMZ80EXE=<llvm-z80 build>/bin/clang \
 #        LLVM_Z80_BUILD=<llvm-z80 build dir> \
 #        ./bench_math32_vs_compilerrt_size.sh
-# Skips (exit 0) if the required tools aren't available.
 set -e
 DIR=$(cd "$(dirname "$0")" && pwd)
+WORKSPACE_ROOT=$(cd "$DIR/../../.." && pwd)
+
+fail() { echo "ERROR: $*" >&2; exit 1; }
+
+if [ -n "${LLVMZ80EXE:-}" ]; then
+	[ -x "$LLVMZ80EXE" ] || fail "LLVMZ80EXE is not executable: $LLVMZ80EXE"
+	LLVMZ80EXE=$(cd "$(dirname "$LLVMZ80EXE")" && pwd)/$(basename "$LLVMZ80EXE")
+	LLVM_Z80_BUILD=${LLVM_Z80_BUILD:-$(cd "$(dirname "$LLVMZ80EXE")/.." && pwd)}
+else
+	LLVM_Z80_BUILD=${LLVM_Z80_BUILD:-"$WORKSPACE_ROOT/llvm-z80/build-macos-asserts"}
+	LLVMZ80EXE="$LLVM_Z80_BUILD/bin/clang"
+fi
+export LLVM_Z80_BUILD LLVMZ80EXE
 [ -f "$DIR/test_env.sh" ] && . "$DIR/test_env.sh"
-BRIDGE_DIR="$DIR/../../libsrc/l/llvmz80"
 MATH32_DIR="$DIR/../../libsrc"
 
-command -v zcc >/dev/null 2>&1 || { echo "SKIP: zcc not on PATH"; exit 0; }
-LLVM_Z80_BUILD=${LLVM_Z80_BUILD:-}
-if [ -z "$LLVM_Z80_BUILD" ]; then
-	for candidate in \
-		"/Users/ravn/z80/llvm-z80/build-macos" \
-		"/Users/ravn/z80/llvm-z80/build" \
-		"/home/ravn/z80/llvm-z80/build-macos" \
-		"/home/ravn/z80/llvm-z80/build"; do
-		if [ -x "$candidate/bin/clang" ] && "$candidate/bin/clang" --version 2>&1 | grep -q "z80\|Z80"; then
-			LLVM_Z80_BUILD="$candidate"
-			break
-		fi
-	done
-fi
-[ -n "$LLVM_Z80_BUILD" ] || { echo "SKIP: set LLVM_Z80_BUILD to the llvm-z80 build dir"; exit 0; }
-CLANG="$LLVM_Z80_BUILD/bin/clang"
+command -v zcc >/dev/null 2>&1 || fail "zcc not found on PATH"
+command -v python3 >/dev/null 2>&1 || fail "python3 not found on PATH"
+[ -x "$LLVMZ80EXE" ] || fail "missing llvm-z80 clang: $LLVMZ80EXE"
+CLANG="$LLVMZ80EXE"
 LLD="$LLVM_Z80_BUILD/bin/ld.lld"
 OBJCOPY="$LLVM_Z80_BUILD/bin/llvm-objcopy"
 RT_LIB="$LLVM_Z80_BUILD/lib/z80/elf-runtime/builtins"
 for f in "$CLANG" "$LLD" "$OBJCOPY"; do
-	[ -x "$f" ] || { echo "SKIP: missing $f"; exit 0; }
+	[ -x "$f" ] || fail "missing required tool: $f"
+done
+for f in divsf3.o; do
+	[ -s "$RT_LIB/$f" ] || fail "missing compiler-rt runtime object: $RT_LIB/$f"
 done
 
-WORK=/tmp/benchsize; rm -rf "$WORK"; mkdir -p "$WORK"
+WORK=$(mktemp -d "$WORKSPACE_ROOT/scratch/tmp/benchsize.XXXXXX") \
+	|| fail "could not create benchmark work directory under scratch/tmp"
+cleanup() {
+	status=$?
+	if [ -n "${WORK:-}" ] && [ -d "$WORK" ]; then
+		if [ "$status" -eq 0 ]; then
+			rm -rf "$WORK"
+		else
+			echo "Benchmark artifacts retained at $WORK" >&2
+		fi
+	fi
+}
+trap cleanup EXIT
 
 # --- math32 side --------------------------------------------------------
 # $1 = label, $2 = extra body (empty for baseline, one division for div).
@@ -71,18 +84,12 @@ build_math32() {
 	    return 0;
 	}
 	EOF
-	if [ "$label" = "div" ]; then
-		asmfiles="$BRIDGE_DIR/__addsf3.asm"
-	else
-		asmfiles=""
-	fi
-	# shellcheck disable=SC2086
 	if ! zcc +cpm -compiler=llvmz80 -O2 -create-app \
-		-mllvm -z80-float-sdcccall0 \
 		-L"$MATH32_DIR" -lmath32 \
-		-o "$WORK/m32_$label" $asmfiles "$src" >"$WORK/m32_$label.log" 2>&1; then
+		-o "$WORK/m32_$label" "$src" >"$WORK/m32_$label.log" 2>&1; then
 		echo "BUILD FAILED (m32 $label):"; cat "$WORK/m32_$label.log"; exit 1
 	fi
+	[ -s "$WORK/m32_$label.com" ] || { echo "BUILD FAILED (m32 $label): missing or empty .com"; exit 1; }
 	wc -c <"$WORK/m32_$label.com" | tr -d ' '
 }
 
@@ -112,7 +119,9 @@ build_compilerrt() {
 	# shellcheck disable=SC2086
 	"$LLD" -e __start -Ttext=0 "$obj" $objs -o "$elf" 2>"$WORK/rt_$label.link.log" \
 		|| { echo "LINK FAILED (rt $label):"; cat "$WORK/rt_$label.link.log"; exit 1; }
+	[ -s "$elf" ] || { echo "LINK FAILED (rt $label): missing or empty $elf"; exit 1; }
 	"$OBJCOPY" -O binary "$elf" "$bin"
+	[ -s "$bin" ] || { echo "LINK FAILED (rt $label): missing or empty $bin"; exit 1; }
 	wc -c <"$bin" | tr -d ' '
 }
 

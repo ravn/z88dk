@@ -1,19 +1,6 @@
 #!/bin/sh
-# Red-green runtime test covering EVERY routine in the libsrc/l/llvmz80/ integer
-# runtime bridge (bridges to the shared l_* math cores).
-#
-# Which compiler-rt name the backend emits depends on the opt level and code
-# shape, so this builds + runs runtime_intdiv.c at -O2, -O3 and
-# -O2 --opt-code-size and, for
-# each, (a) asserts the link resolved, (b) asserts the map references the
-# bridge symbols that opt level is expected to emit (coverage proof), and
-# (c) runs it in ntvcm and checks every computed value.
-#
-# GREEN: links + prints correct results at all opt levels.
-# RED  : a missing bridge symbol -> "undefined symbol: ___...", or a wrong-ABI
-#        bridge -> links but prints wrong numbers.  Both are caught below.
-#        (Before the _fast + __divmodsi4/__udivmodsi4 bridges existed, the -O3
-#        link failed on ___divhi3_fast / ___divmodsi4.)
+# Native integer-runtime regression at O2/O3/Oz. Checks link success, native
+# call-site coverage, absence of legacy wrapper symbols, and exact values.
 #
 # Usage: ZCCCFG=<z88dk>/lib/config PATH=<z88dk>/bin:$PATH \
 #        NTVCM=/path/to/ntvcm ./runtime_intdiv.sh
@@ -45,12 +32,8 @@ EXP_Q="q 28 4"
 
 # run_at <opt> <expected syms...> [ -- <forbidden syms...> ]
 # Expected syms must be CALLED in the generated asm (emission/coverage proof);
-# forbidden syms must NOT be called (used to prove -O2 does NOT reach the
-# -O3-only _fast cores).  We grep the .s call sites -- not the .map -- because
-# each bridge object exports several PUBLIC aliases (e.g. ___divhi3 AND
-# ___divhi3_fast live in the same module), so a name can be DEFINED in the map
-# without being CALLED.  Symbols are the exact asm spelling (leading ___) and
-# matched with -wF so ___divhi3 does not spuriously match ___divhi3_fast.
+# forbidden syms must NOT be emitted. Inspect generated asm rather than map
+# aliases, using exact asm spellings (-wF distinguishes legacy _fast names).
 run_at() {
 	OPT="$1"; shift
 	EXPECT_SYMS=""; FORBID_SYMS=""; _phase=expect
@@ -68,7 +51,7 @@ run_at() {
 	if ! zcc +cpm -compiler=llvmz80 ${ZCC_CLIB:-} $OPT -create-app -o "$B" "$SRC" -m >"$B.log" 2>&1; then
 		echo "--- build log ($OPT) ---"; cat "$B.log"
 		if grep -qi 'undefined symbol' "$B.log"; then
-			fail "$OPT: link failed with undefined runtime helper (bridge symbol missing from z80_crt0.lib?)"
+			fail "$OPT: link failed with undefined runtime helper"
 		fi
 		fail "$OPT: zcc build failed"
 	fi
@@ -105,6 +88,6 @@ run_at "-O3" l_divs_16_16x16 l_divu_16_16x16 l_mulu_16_16x16 l_divs_32_32x32 l_d
 	   ___divmodsi4 ___udivmodsi4 ___divsi3 ___modsi3 ___udivsi3 ___umodsi3 ___mulsi3
 run_at "-O2 --opt-code-size" l_divs_16_16x16 l_divu_16_16x16 l_mulu_16_16x16 l_fast_divu_8_8x8 l_divs_32_32x32 l_divu_32_32x32 \
 	-- ___divmodsi4 ___udivmodsi4 ___divsi3 ___modsi3 ___udivsi3 ___umodsi3 \
-	-- ___udivqi3 ___umodqi3
+	   ___udivqi3 ___umodqi3
 
 echo "PASS: llvmz80 integer runtime (16/8/32-bit) calls z88dk l_* cores directly and computes correctly at -O2, -O3 and --opt-code-size"

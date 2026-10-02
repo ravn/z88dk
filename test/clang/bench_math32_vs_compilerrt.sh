@@ -13,14 +13,16 @@
 #
 # Method for each op:
 #   math32 side:      the REAL production pipeline, `zcc +cpm
-#                      -compiler=llvmz80 -mllvm -z80-float-sdcccall0
-#                      -lmath32`, N=2000 loop, z88dk-ticks on the .com.
+#                      -compiler=llvmz80 -lmath32`, N=2000 loop, ticks_cpm.py
+#                      on the .com. zcc selects
+#                      --target=z80-unknown-none-z88dk, which lowers float
+#                      libcalls to the existing cm32_sdcc_* runtime entries.
 #   compiler-rt side: a standalone freestanding binary (no CP/M CRT): plain
 #                      portable C compiled `--target=z80 -Os` (optionally
-#                      -ffast-math) with no z88dk/-sdcccall0 flag, so clang
-#                      emits the DEFAULT-ABI libcall; linked directly against
-#                      the prebuilt compiler-rt .o for that op; N=2000 loop;
-#                      z88dk-ticks -pc <_start> -end <_bench_halt address>.
+#                      -ffast-math) with no z88dk target, so clang emits the
+#                      DEFAULT-ABI libcall; linked directly against the
+#                      prebuilt compiler-rt .o for that op; N=2000 loop.
+#                      z88dk-ticks stops at the explicit _bench_halt address.
 #                      Letting clang itself lower the libcall (rather than
 #                      hand-rolling the register shuffle) is deliberate: it
 #                      is what a real freestanding compiler-rt caller does,
@@ -33,48 +35,62 @@
 # Usage: PATH=<z88dk>/bin:$PATH ZCCCFG=<z88dk>/lib/config \
 #        LLVMZ80EXE=<llvm-z80 build>/bin/clang \
 #        LLVM_Z80_BUILD=<llvm-z80 build dir> ./bench_math32_vs_compilerrt.sh
-# Skips (exit 0) if the required tools aren't available.
 set -e
 export LC_NUMERIC=C LC_ALL=C
 DIR=$(cd "$(dirname "$0")" && pwd)
-[ -f "$DIR/test_env.sh" ] && . "$DIR/test_env.sh"
-BRIDGE_DIR="$DIR/../../libsrc/l/llvmz80"
-MATH32_DIR="$DIR/../../libsrc"
+WORKSPACE_ROOT=$(cd "$DIR/../../.." && pwd)
 
-command -v zcc >/dev/null 2>&1 || { echo "SKIP: zcc not on PATH"; exit 0; }
-command -v z88dk-ticks >/dev/null 2>&1 || { echo "SKIP: z88dk-ticks not on PATH"; exit 0; }
-LLVM_Z80_BUILD=${LLVM_Z80_BUILD:-}
-if [ -z "$LLVM_Z80_BUILD" ]; then
-	for candidate in \
-		"/Users/ravn/z80/llvm-z80/build-macos" \
-		"/Users/ravn/z80/llvm-z80/build" \
-		"/home/ravn/z80/llvm-z80/build-macos" \
-		"/home/ravn/z80/llvm-z80/build"; do
-		if [ -x "$candidate/bin/clang" ] && "$candidate/bin/clang" --version 2>&1 | grep -q "z80\|Z80"; then
-			LLVM_Z80_BUILD="$candidate"
-			break
-		fi
-	done
+fail() { echo "ERROR: $*" >&2; exit 1; }
+
+if [ -n "${LLVMZ80EXE:-}" ]; then
+	[ -x "$LLVMZ80EXE" ] || fail "LLVMZ80EXE is not executable: $LLVMZ80EXE"
+	LLVMZ80EXE=$(cd "$(dirname "$LLVMZ80EXE")" && pwd)/$(basename "$LLVMZ80EXE")
+	LLVM_Z80_BUILD=${LLVM_Z80_BUILD:-$(cd "$(dirname "$LLVMZ80EXE")/.." && pwd)}
+else
+	LLVM_Z80_BUILD=${LLVM_Z80_BUILD:-"$WORKSPACE_ROOT/llvm-z80/build-macos-asserts"}
+	LLVMZ80EXE="$LLVM_Z80_BUILD/bin/clang"
 fi
-[ -n "$LLVM_Z80_BUILD" ] || { echo "SKIP: set LLVM_Z80_BUILD to the llvm-z80 build dir"; exit 0; }
-CLANG="$LLVM_Z80_BUILD/bin/clang"
+export LLVM_Z80_BUILD LLVMZ80EXE
+[ -f "$DIR/test_env.sh" ] && . "$DIR/test_env.sh"
+MATH32_DIR="$DIR/../../libsrc"
+TICKS_CPM="$WORKSPACE_ROOT/scratch/dcc-clang-bench/ticks_cpm.py"
+
+command -v zcc >/dev/null 2>&1 || fail "zcc not found on PATH"
+command -v z88dk-ticks >/dev/null 2>&1 || fail "z88dk-ticks not found on PATH"
+command -v python3 >/dev/null 2>&1 || fail "python3 not found on PATH"
+[ -x "$LLVMZ80EXE" ] || fail "missing llvm-z80 clang: $LLVMZ80EXE"
+[ -f "$TICKS_CPM" ] || fail "missing CP/M ticks harness: $TICKS_CPM"
+CLANG="$LLVMZ80EXE"
 LLD="$LLVM_Z80_BUILD/bin/ld.lld"
 OBJCOPY="$LLVM_Z80_BUILD/bin/llvm-objcopy"
 OBJDUMP="$LLVM_Z80_BUILD/bin/llvm-objdump"
 RT_LIB="$LLVM_Z80_BUILD/lib/z80/elf-runtime/builtins"
+RT_TICKS_LIMIT=50000000
 for f in "$CLANG" "$LLD" "$OBJCOPY" "$OBJDUMP"; do
-	[ -x "$f" ] || { echo "SKIP: missing $f"; exit 0; }
+	[ -x "$f" ] || fail "missing required tool: $f"
+done
+for f in addsf3.o mulsf3.o divsf3.o cmpsf2.o fixsfsi.o floatsisf.o; do
+	[ -s "$RT_LIB/$f" ] || fail "missing compiler-rt runtime object: $RT_LIB/$f"
 done
 
-WORK=/tmp/benchkeep; mkdir -p "$WORK"
-# trap disabled for debug
+WORK=$(mktemp -d "$WORKSPACE_ROOT/scratch/tmp/benchkeep.XXXXXX") \
+	|| fail "could not create benchmark work directory under scratch/tmp"
+cleanup() {
+	status=$?
+	if [ -n "${WORK:-}" ] && [ -d "$WORK" ]; then
+		if [ "$status" -eq 0 ]; then
+			rm -rf "$WORK"
+		else
+			echo "Benchmark artifacts retained at $WORK" >&2
+		fi
+	fi
+}
+trap cleanup EXIT
 
 # --- math32 side: real zcc pipeline, N=2000 loop -----------------------------
 # $1 = op label, $2 = C loop body, $3 = extra zcc flags (e.g. -ffast-math).
-# Always links all 3 llvmz80 math32 bridge files that are self-contained
-# (no INCLUDE dependency) -- __addsf3 (add/sub/mul/div), __cmpsf2 (compare),
-# __floatsisf (f2i/i2f) -- since the shared loop template's `(int)rf` return
-# cast alone drags in ___fixsfsi regardless of which op is under test.
+# The Z88DK triple calls existing math32 entries, including the conversion
+# needed by the shared template's `(int)rf` return.
 bench_math32() {
 	label=$1; body=$2; extra=$3
 	src="$WORK/m32_$label.c"
@@ -91,13 +107,22 @@ bench_math32() {
 	}
 	EOF
 	if ! zcc +cpm -compiler=llvmz80 -O2 $extra -create-app \
-		-mllvm -z80-float-sdcccall0 \
 		-L"$MATH32_DIR" -lmath32 \
-		-o "$WORK/m32_$label" "$BRIDGE_DIR/__addsf3.asm" "$BRIDGE_DIR/__cmpsf2.asm" "$BRIDGE_DIR/__floatsisf.asm" "$src" >"$WORK/m32_$label.log" 2>&1; then
+		-o "$WORK/m32_$label" "$src" >"$WORK/m32_$label.log" 2>&1; then
 		echo "BUILD FAILED ($label, math32):"; cat "$WORK/m32_$label.log"; exit 1
 	fi
-	total=$(z88dk-ticks "$WORK/m32_$label.com" 2>/dev/null | tail -1)
-	echo "$total"
+	com="$WORK/m32_$label.com"
+	[ -s "$com" ] || { echo "BUILD FAILED ($label, math32): missing $com"; exit 1; }
+	if ! TMPDIR="$WORK" Z88DK_TICKS="$(command -v z88dk-ticks)" \
+		python3 "$TICKS_CPM" "$com" \
+		>"$WORK/m32_$label.stdout" 2>"$WORK/m32_$label.ticks"; then
+		echo "TICKS FAILED ($label, math32):"; cat "$WORK/m32_$label.stdout" "$WORK/m32_$label.ticks"; exit 1
+	fi
+	total=$(awk '$1 == "[ticks]" && $3 == "cycles" && $2 ~ /^[0-9]+$/ { n++; value=$2 }
+		END { if (n != 1) exit 1; print value }' "$WORK/m32_$label.ticks") \
+		|| { echo "INVALID TICKS ($label, math32):"; cat "$WORK/m32_$label.ticks"; exit 1; }
+	[ "$total" -gt 0 ] || { echo "INVALID TICKS ($label, math32): $total"; exit 1; }
+	printf '%s\n' "$total"
 }
 
 # --- compiler-rt side: standalone freestanding binary, N=2000 loop ----------
@@ -129,11 +154,30 @@ bench_compilerrt() {
 	# shellcheck disable=SC2086
 	"$LLD" -e __start -Ttext=0 "$obj" $objs -o "$elf" 2>"$WORK/rt_$label.link.log" \
 		|| { echo "LINK FAILED ($label, compiler-rt):"; cat "$WORK/rt_$label.link.log"; exit 1; }
+	[ -s "$elf" ] || { echo "LINK FAILED ($label, compiler-rt): missing $elf"; exit 1; }
 	"$OBJCOPY" -O binary "$elf" "$bin"
-	start=$("$OBJDUMP" -t "$elf" | awk '/ __start$/{print $1}')
-	halt=$("$OBJDUMP" -t "$elf" | awk '/ _bench_halt$/{print $1}')
-	total=$(z88dk-ticks -pc "0x$start" -end "0x$halt" "$bin" 2>/dev/null | tail -1)
-	echo "$total"
+	[ -s "$bin" ] || { echo "LINK FAILED ($label, compiler-rt): missing or empty $bin"; exit 1; }
+	start=$("$OBJDUMP" -t "$elf" | awk '$NF == "__start" { n++; value=$1 }
+		END { if (n != 1) exit 1; print value }') \
+		|| { echo "LINK FAILED ($label, compiler-rt): missing unique __start symbol"; exit 1; }
+	halt=$("$OBJDUMP" -t "$elf" | awk '$NF == "_bench_halt" { n++; value=$1 }
+		END { if (n != 1) exit 1; print value }') \
+		|| { echo "LINK FAILED ($label, compiler-rt): missing unique _bench_halt symbol"; exit 1; }
+	if ! z88dk-ticks -pc "0x$start" -end "0x$halt" \
+		-counter "$RT_TICKS_LIMIT" "$bin" \
+		>"$WORK/rt_$label.ticks" 2>"$WORK/rt_$label.ticks.err"; then
+		echo "TICKS FAILED ($label, compiler-rt):"; cat "$WORK/rt_$label.ticks" "$WORK/rt_$label.ticks.err"; exit 1
+	fi
+	total=$(awk 'NF == 0 { next }
+		$0 ~ /^[0-9]+$/ { n++; value=$0; next }
+		$0 ~ /^Ticks: [0-9]+$/ { n++; value=$2; next }
+		{ bad=1 }
+		END { if (n != 1 || bad) exit 1; print value }' "$WORK/rt_$label.ticks") \
+		|| { echo "INVALID TICKS ($label, compiler-rt):"; cat "$WORK/rt_$label.ticks" "$WORK/rt_$label.ticks.err"; exit 1; }
+	[ "$total" -gt 0 ] || { echo "INVALID TICKS ($label, compiler-rt): $total"; exit 1; }
+	[ "$total" -lt "$RT_TICKS_LIMIT" ] \
+		|| { echo "INCOMPLETE TICKS ($label, compiler-rt): hit $RT_TICKS_LIMIT-cycle watchdog"; exit 1; }
+	printf '%s\n' "$total"
 }
 
 # op, math32 body, compiler-rt body, compiler-rt objs (space-separated),
@@ -163,5 +207,4 @@ run_op i2f     'rf = (float)ia;' 'rf = (float)ia;' "$RT_LIB/floatsisf.o"
 echo ""
 echo "=== -ffast-math compare (___cmpsf2_fast) ==="
 run_op compare_fast 'r = (a < b);' 'r = (a < b);' "$RT_LIB/cmpsf2.o" "-ffast-math" "-ffast-math"
-
 echo "PASS: bench_math32_vs_compilerrt"

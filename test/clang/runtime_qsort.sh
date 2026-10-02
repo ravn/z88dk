@@ -1,10 +1,10 @@
 #!/bin/sh
 # Red-green runtime test for qsort with a clang/llvmz80 comparator.
 #
-# GREEN: a comparator declared __smallc (== sdcccall(0)) is compiled to read
+# GREEN: a comparator declared __z88dk_callback is compiled to read
 #        its two arguments from the stack and return the int result in HL --
-#        exactly the protocol qsort_sdcc_callee uses when it invokes the
-#        comparator.  The array sorts correctly (ascending and descending).
+#        exactly the protocol l_cmp_sdcc uses to invoke the comparator.
+#        Fixed arrays sort in both directions before checking the LCG dataset.
 # RED  : a DEFAULT (unannotated) comparator takes a in HL, b in DE and returns
 #        in DE; qsort_sdcc feeds it stack args and reads HL -> the sort
 #        scrambles the array instead of ordering it.
@@ -38,7 +38,12 @@ fi
 
 OUT=$("$NTVCM" "$WORK/RT.COM" 2>/dev/null | tr -d '\r')
 
-EXP='qsort 200 5 991 OK'
-echo "$OUT" | grep -qF "$EXP" || fail "output wrong. got: [$OUT] want: [$EXP]"
+CALLBACK_EXP='callback asc=-3,0,1,7,7 desc=7,7,1,0,-3'
+echo "$OUT" | grep -qxF "$CALLBACK_EXP" \
+	|| fail "callback ABI/output wrong. got: [$OUT] want: [$CALLBACK_EXP]"
+echo "  ok callback ABI (fixed data, both directions)"
 
-echo "PASS: llvmz80 qsort sorts correctly with an __smallc comparator"
+EXP='qsort 200 5 991 OK'
+echo "$OUT" | grep -qxF "$EXP" || fail "LCG dataset/output wrong. got: [$OUT] want: [$EXP]"
+
+echo "PASS: llvmz80 qsort callback ABI and LCG dataset sort correctly"

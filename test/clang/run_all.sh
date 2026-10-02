@@ -74,8 +74,8 @@ PASS=0; FAIL=0; SKIP=0; XFAIL=0; XPASS=0
 # hard wall-clock limit; on timeout it kills the test shell AND any ntvcm it
 # spawned and reports the test as a TIMEOUT (counted as FAIL).
 #
-# TEST_TIMEOUT is the per-test limit in seconds (default 25; a healthy test
-# runs in well under a second, so this only ever fires on a genuine hang).
+# TEST_TIMEOUT is the per-test limit in seconds (default 25).
+# The link survey builds 91 programs and gets a minimum of 120 seconds.
 TEST_TIMEOUT=${TEST_TIMEOUT:-25}
 
 # kill_tree <signal> <pid>: terminate the test shell and only its descendants.
@@ -100,7 +100,10 @@ run_one() {
     _name=$(basename "$_script")
     _limit=$TEST_TIMEOUT
     case "$_name" in
-        stdlib_coverage.sh) _limit=60 ;;
+        stdlib_coverage.sh)
+            # The measured 91-build survey exceeds 60s; honor larger overrides.
+            [ "$_limit" -ge 120 ] || _limit=120
+            ;;
     esac
     : > "$_out"
     sh "$_script" > "$_out" 2>&1 &
@@ -215,7 +218,7 @@ for script in "$DIR"/*.sh; do
 
     case "$result" in
         __TIMEOUT__)
-            echo "[$DONE/$TOTAL] FAIL  $name -- TIMEOUT: killed after ${TEST_TIMEOUT}s (hang)"
+            echo "[$DONE/$TOTAL] FAIL  $name -- TIMEOUT: killed after ${_limit}s (hang)"
             FAIL=$((FAIL + 1))
             ;;
         PASS:*|PASS\ *)

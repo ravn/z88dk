@@ -1,21 +1,8 @@
-/* Runtime test for the ravn/llvm-z80 clang f32 FAST-MATH compare bridge
- * (libsrc/l/llvmz80/__cmpsf2.asm's ___cmpsf2_fast -> z88dk math32's raw
- * m32_compare core, no NaN check). ravn/llvm-z80 #277 follow-up.
+/* Runtime test for f32 finite comparisons under -ffast-math, using the
+ * ravn/llvm-z80 lowering to existing z88dk math32 predicates.
+ * ravn/llvm-z80 #277 follow-up.
  *
- * ___cmpsf2_fast is only emitted by Z80LegalizerInfo.cpp's
- * hasAllFastFlags() path, i.e. only when every fcmp in this TU carries all
- * three fast-math flags (nnan+ninf+nsz) -- which needs -ffast-math (or an
- * equivalent per-function attribute) at compile time. This test is built
- * with -ffast-math specifically so the compiler takes that path instead of
- * the NaN-checked ___cmpsf2/__gtsf2/__gesf2 (already covered, with NaN
- * cases, by runtime_fcmp.c/.sh).
- *
- * NaN is deliberately NOT exercised here -- -ffast-math tells the compiler
- * NaN cannot occur, so its behaviour on a NaN input is unspecified by
- * design, not a bug to pin down. This test only has to prove the ordinary
- * (non-NaN) tri-state compare is still correct once the NaN check is
- * removed, across all six ordered predicates clang can lower to
- * ___cmpsf2_fast (see the OrderedPred switch in Z80LegalizerInfo.cpp).
+ * NaNs are outside the current runtime-test policy and are not asserted.
  */
 #include <stdio.h>
 
