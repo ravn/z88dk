@@ -3843,6 +3843,10 @@ static void configure_compiler(void)
         }
         add_option_to_compiler(buf);
 
+        if (c_generate_debug_info) {
+            add_option_to_compiler("-g");
+        }
+
         if (clangarg) {
             add_option_to_compiler(clangarg);
         }
