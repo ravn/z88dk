@@ -40,6 +40,16 @@
 #define __z88dk_deprecated
 #define __z88dk_sdccdecl
 
+// __preserves_regs(...) is a builtin keyword in sccz80 and SDCC (it annotates
+// which registers a hand-asm routine leaves untouched), but clang/ez80-clang
+// have no such keyword.  Without a no-op mapping, ctype.h's fastcall decls
+// (e.g. `isdigit_fastcall(int) __z88dk_fastcall CTYPE_PRESERVE`) fail to parse
+// under clang once __STDC_ABI_ONLY is not defined ("expected function body
+// after function declarator").  Map it to nothing for the clang toolchains.
+#if __clang__ | __XCC
+#define __preserves_regs(x...)
+#endif
+
 #if __SDCC
 // __smallconly is for functions that only come in a smallc variant
 #define __smallconly __smallc
@@ -50,10 +60,22 @@
 
 // Make intellisense run easier..
 #if __clang__ | __CLANG | __XCC
+#if !defined(__LLVMZ80)
 #define __STDC_ABI_ONLY
-#define __smallc
-#define __z88dk_callee
-#define __z88dk_fastcall
+#endif
+// LLVM-Z80 maps these attributes to distinct classic-library ABIs:
+// fastcall uses L/HL/DE:HL by argument width; callee cleans stack args;
+// smallc pushes left-to-right and caller cleans.
+#define __smallc __attribute__((smallc))
+#define __z88dk_callee __attribute__((z88dk_callee))
+#define __z88dk_fastcall __attribute__((z88dk_fastcall))
+
+// Variadic classic stdio uses right-to-left stack args and HL returns.
+// Keep it separate from __smallc; ez80-clang uses its own __stdc ABI.
+#if defined(__LLVMZ80)
+#undef  __vasmallc
+#define __vasmallc __attribute__((sdcccall(0)))
+#endif
 #endif
 
 #else

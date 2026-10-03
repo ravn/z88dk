@@ -221,8 +221,8 @@ extern FILE __LIB__ *funopen(const void     *cookie, int (*readfn)(void *, char 
                     fpos_t (*seekfn)(void *, fpos_t, int), int (*closefn)(void *)) __smallc;
 #endif
 
-extern int __LIB__  fclose(FILE *fp);
-extern int __LIB__  fflush(FILE *);
+extern int __LIB__  fclose(FILE *fp) __smallc;
+extern int __LIB__  fflush(FILE *fp) __smallc;
 
 extern void __LIB__ closeall(void);
 
@@ -234,7 +234,7 @@ extern void __LIB__ closeall(void);
 __ZPROTO3(char,*,fgets,char *,s,int,l,FILE *,fp)
 
 __ZPROTO2(int,,fputs,const char *,s,FILE *,fp)
-#ifndef __STDC_ABI_ONLY
+#if !defined(__STDC_ABI_ONLY) && !defined(__LLVMZ80)
 extern int __LIB__  fputs_callee(const char *s,  FILE *fp) __smallc __z88dk_callee;
 #define fputs(a,b)   fputs_callee(a,b)
 #endif
@@ -242,49 +242,49 @@ extern int __LIB__  fputs_callee(const char *s,  FILE *fp) __smallc __z88dk_call
 
 
 extern int __LIB__ fputc(int c, FILE *fp) __smallc;
-#ifndef __STDC_ABI_ONLY
+#if !defined(__STDC_ABI_ONLY) && !defined(__LLVMZ80)
 extern int __LIB__  fputc_callee(int c, FILE *fp) __smallc __z88dk_callee;
 #define fputc(a,b)   fputc_callee(a,b)
 #define putc(bp,fp) fputc_callee(bp,fp)
 #define putchar(bp) fputc_callee(bp,stdout)
 #else
-// clang expects putchar to be a library function not just a macro
-extern int putchar(int);
+// clang (llvmz80 + ez80) expects putchar to be a library function not just a
+// macro.  __smallc carries the stack calling convention (sdcccall(0)) so clang
+// pushes the argument instead of leaving it in HL -- without it console output
+// is corrupted (see include/sys/compiler.h).  The sccz80/sdcc __z88dk_callee
+// redirect above is excluded for llvmz80 because the classic fputs_callee/
+// fputc_callee C-#asm workers are not genuinely callee-clean the way clang's
+// z80_callee assumes, so exposing them drifts SP (program restarts in a loop);
+// the plain __smallc fputs/fputc (caller-clean _fputs/_fputc) are correct.
+extern int __LIB__ putchar(int) __smallc;
 #define putc(bp,fp) fputc(bp,fp)
 #endif
 
-extern int __LIB__ fgetc(FILE *fp);
+extern int __LIB__ fgetc(FILE *fp) __smallc;
 #define getc(f) fgetc(f)
 
 __ZPROTO2(int,,ungetc,int,c,FILE *,fp)
 
 extern int __LIB__ feof(FILE *fp);
-#ifndef __STDC_ABI_ONLY
 extern int __LIB__ feof_fastcall(FILE *fp) __z88dk_fastcall;
 #define feof(f) feof_fastcall(f)
-#endif
 
 
 extern int __LIB__ ferror(FILE *fp);
-#ifndef __STDC_ABI_ONLY
 extern int __LIB__ ferror_fastcall(FILE *fp) __z88dk_fastcall;
 #define ferror(f) ferror_fastcall(f)
-#endif
 
-extern int __LIB__ puts(const char *);
+extern int __LIB__ puts(const char *) __smallc;
 
-#ifdef __STDC_ABI_ONLYe
-
-#endif
 #define getchar()  fgetc(stdin)
 
 
 /* Routines for file positioning */
-extern fpos_t __LIB__ ftell(FILE *fp);
+extern fpos_t __LIB__ ftell(FILE *fp) __smallc;
 __ZPROTO2(int,,fgetpos,FILE *,fp,fpos_t *, pos)
 
 
-#ifndef __STDC_ABI_ONLY
+#if !defined(__STDC_ABI_ONLY)
 extern int __LIB__ __SAVEFRAME__ fseek(FILE *fp, fpos_t offset, int whence) __smallc;
 #else
 __ZPROTO3(int,,fseek,FILE *,fp,fpos_t,offset,int,whence)
@@ -304,11 +304,15 @@ extern int __LIB__ printf(const char *fmt,...) __vasmallc;
 extern int __LIB__ fprintf(FILE *f,const char *fmt,...) __vasmallc;
 extern int __LIB__ sprintf(char *s,const char *fmt,...) __vasmallc;
 extern int __LIB__ snprintf(char *s,size_t n,const char *fmt,...) __vasmallc;
-extern int __LIB__ vfprintf(FILE *f,const char *fmt,void *ap);
-extern int __LIB__ vsnprintf(char *str, size_t n,const char *fmt,void *ap);
+extern int __LIB__ vfprintf(FILE *f,const char *fmt,void *ap) __vasmallc;
+extern int __LIB__ vsnprintf(char *str, size_t n,const char *fmt,void *ap) __vasmallc;
 
 #define vprintf(ctl,arg) vfprintf(stdout,ctl,arg)
 #define vsprintf(buf,ctl,arg) vsnprintf(buf,65535,ctl,arg)
+
+/* llvmz80: no printf shim needed -- `double`/`float` are 32-bit IEEE-754 and
+ * stock printf("%f") works via the math32 bridge in llvmz80.lst with --math32
+ * (or -lm); no opt-in shim or environment/config variable. */
 
 
 // Some far variants of functions
@@ -331,8 +335,8 @@ extern void __LIB__ printn(int number, int radix,FILE *file) __smallc;
 extern int __LIB__ scanf(const char *fmt,...) __vasmallc;
 extern int __LIB__ fscanf(FILE *,const char *fmt,...) __vasmallc;
 extern int __LIB__ sscanf(char *,const char *fmt,...) __vasmallc;
-extern int __LIB__ vfscanf(FILE *, const char *fmt, void *ap); 
-extern int __LIB__ vsscanf(char *str, const char *fmt, void *ap);
+extern int __LIB__ vfscanf(FILE *, const char *fmt, void *ap) __vasmallc;
+extern int __LIB__ vsscanf(char *str, const char *fmt, void *ap) __vasmallc;
 #define vscanf(ctl,arg) vfscanf(stdin,ctl,arg)
 
 
@@ -373,7 +377,7 @@ __ZPROTO2(int,,fdgetpos,int,fd,fpos_t *,pos)
 /* Rename a file */
 __ZPROTO2(int,,rename,const char *,s,const char *,d)
 /* Remove a file */
-extern int __LIB__ remove(const char *name);
+extern int __LIB__ remove(const char *name) __smallc;
 
 
 /* Scan for a keypress using the default keyboard driver */

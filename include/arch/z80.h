@@ -123,9 +123,15 @@ extern void __LIB__ *z80_indr_callee(void *dst,uint8_t port,uint8_t num) __small
 #define z80_indr(a,b,c) z80_indr_callee(a,b,c)
 
 
+#if defined(__LLVMZ80)
+extern void __LIB__ z80_outp(uint16_t port,uint16_t data) __smallc;
+extern void __LIB__ z80_outp_callee(uint16_t port,uint16_t data) __smallc __z88dk_callee;
+#define z80_outp(a,b) z80_outp_callee(a,b)
+#else
 extern void __LIB__ z80_outp(uint16_t port,uint8_t data) __smallc;
 extern void __LIB__ z80_outp_callee(uint16_t port,uint8_t data) __smallc __z88dk_callee;
 #define z80_outp(a,b) z80_outp_callee(a,b)
+#endif
 
 
 extern void __LIB__ *z80_otir(void *src,uint8_t port,uint8_t num) __smallc;

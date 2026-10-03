@@ -23,18 +23,23 @@
 //////////////////////////////////
 
 // double atof(char *s);                    /* check math library for availability */
-#if defined(__MATH_MATH32)
-extern double atof(const char *s);
-#endif
 
 extern int  __LIB__   atoi(const char *s);
 #ifndef __STDC_ABI_ONLY
+extern int  __LIB__   atoi_fastcall(const char *s) __z88dk_fastcall;
+#define atoi(x) atoi_fastcall(x)
+#elif defined(__LLVMZ80)
+/* Route single-argument calls through the matching register ABI entry. */
 extern int  __LIB__   atoi_fastcall(const char *s) __z88dk_fastcall;
 #define atoi(x) atoi_fastcall(x)
 #endif
 
 extern long __LIB__   atol(const char *s);
 #ifndef __STDC_ABI_ONLY
+extern long __LIB__   atol_fastcall(const char *s) __z88dk_fastcall;
+#define atol(x) atol_fastcall(x)
+#elif defined(__LLVMZ80)
+/* Use the register-ABI entry for llvmz80. */
 extern long __LIB__   atol_fastcall(const char *s) __z88dk_fastcall;
 #define atol(x) atol_fastcall(x)
 #endif
@@ -51,13 +56,13 @@ extern char __LIB__ *ltoa_callee(long num,char *buf,int radix) __smallc __z88dk_
 #define ltoa(a,b,c) ltoa_callee(a,b,c)
 #endif
 
-__ZPROTO3(long,,strtol,char *,nptr,char **,endptr,int,base)
+__ZPROTO3N(long,,strtol,char *,nptr,char **,endptr,int,base)
 #ifndef __STDC_ABI_ONLY
 extern long __LIB__ strtol_callee(char *nptr,char **endptr,int base) __smallc __z88dk_callee;
 #define strtol(a,b,c) strtol_callee(a,b,c)
 #endif
 
-__ZPROTO3(uint32_t,,strtoul,char *,nptr,char **,endptr,int,base)
+__ZPROTO3N(uint32_t,,strtoul,char *,nptr,char **,endptr,int,base)
 #ifndef __STDC_ABI_ONLY
 extern uint32_t __LIB__ strtoul_callee(char *nptr,char **endptr,int base) __smallc __z88dk_callee;
 #define strtoul(a,b,c) strtoul_callee(a,b,c)
@@ -77,9 +82,6 @@ extern char __LIB__ *utoa_callee(uint16_t num,char *buf,int radix) __smallc __z8
 
 
 // double strtod(char *s, char **endp);     /* check math library for availability */
-#if defined(__MATH_MATH32)
-extern double strtod(const char *nptr, char **endptr);
-#endif
 
 /* 64 bit is only available with sdcc */
 extern long long atoll(char *buf) __smallc;
@@ -127,6 +129,10 @@ extern void __LIB__  srand(unsigned int seed);
 #ifndef __STDC_ABI_ONLY
 extern void __LIB__  srand_fastcall(unsigned int seed) __z88dk_fastcall;
 #define srand(x) srand_fastcall(x)
+#elif defined(__LLVMZ80)
+/* The classic srand entry reads the seed from the stack, not HL. */
+extern void __LIB__  srand_fastcall(unsigned int seed) __z88dk_fastcall;
+#define srand(x) srand_fastcall(x)
 #endif
 
 // Not sure why Rex has it's own rand() routine using different seed?
@@ -158,6 +164,12 @@ extern void __LIB__  exit(int status);
 extern int  __LIB__  atexit(void (*func)(void));
 
 #ifndef __STDC_ABI_ONLY
+extern void __LIB__  exit_fastcall(int status) __z88dk_fastcall;
+extern int  __LIB__  atexit_fastcall(void (*func)(void)) __z88dk_fastcall;
+#define exit(x) exit_fastcall(x)
+#define atexit(x) atexit_fastcall(x)
+#elif defined(__LLVMZ80)
+/* Route these calls through the llvmz80 register-ABI entries. */
 extern void __LIB__  exit_fastcall(int status) __z88dk_fastcall;
 extern int  __LIB__  atexit_fastcall(void (*func)(void)) __z88dk_fastcall;
 #define exit(x) exit_fastcall(x)
@@ -278,10 +290,18 @@ extern int  __LIB__  abs(int n);
 #ifndef __STDC_ABI_ONLY
 extern int  __LIB__  abs_fastcall(int n) __z88dk_fastcall;
 #define abs(x) abs_fastcall(x)
+#elif defined(__LLVMZ80)
+/* The plain entry reads its argument from the stack; llvmz80 passes it in HL. */
+extern int  __LIB__  abs_fastcall(int n) __z88dk_fastcall;
+#define abs(x) abs_fastcall(x)
 #endif
 
 extern long __LIB__  labs(long n);
 #ifndef __STDC_ABI_ONLY
+extern long  __LIB__  labs_fastcall(long n) __z88dk_fastcall;
+#define labs(x) labs_fastcall(x)
+#elif defined(__LLVMZ80)
+/* Use the register-ABI entry for llvmz80. */
 extern long  __LIB__  labs_fastcall(long n) __z88dk_fastcall;
 #define labs(x) labs_fastcall(x)
 #endif
@@ -289,6 +309,10 @@ extern long  __LIB__  labs_fastcall(long n) __z88dk_fastcall;
 
 extern uint __LIB__  isqrt(uint n);
 #ifndef __STDC_ABI_ONLY
+extern uint __LIB__  isqrt_fastcall(uint n) __z88dk_fastcall;
+#define isqrt(x) isqrt_fastcall(x)
+#elif defined(__LLVMZ80)
+/* The plain entry reads its argument from the stack; llvmz80 passes it in HL. */
 extern uint __LIB__  isqrt_fastcall(uint n) __z88dk_fastcall;
 #define isqrt(x) isqrt_fastcall(x)
 #endif
@@ -308,6 +332,10 @@ extern uint __LIB__  isqrt_fastcall(uint n) __z88dk_fastcall;
 
 extern unsigned int  __LIB__  inp(unsigned int port);
 #ifndef __STDC_ABI_ONLY
+extern unsigned int  __LIB__  inp_fastcall(unsigned int port) __z88dk_fastcall;
+#define inp(p) inp_fastcall(p)
+#elif defined(__LLVMZ80)
+/* The plain entry reads the port from the stack; llvmz80 passes it in HL. */
 extern unsigned int  __LIB__  inp_fastcall(unsigned int port) __z88dk_fastcall;
 #define inp(p) inp_fastcall(p)
 #endif
@@ -354,10 +382,18 @@ extern int __LIB__ __SAVEFRAME__     sleep (int secs);
 #ifndef __STDC_ABI_ONLY
 extern int __LIB__ __SAVEFRAME__     sleep_fastcall (int secs) __z88dk_fastcall;
 #define sleep(x) sleep_fastcall(x)
+#elif defined(__LLVMZ80)
+/* The plain entry reads its argument from the stack; llvmz80 passes it in HL. */
+extern int __LIB__ __SAVEFRAME__     sleep_fastcall (int secs) __z88dk_fastcall;
+#define sleep(x) sleep_fastcall(x)
 #endif
 
 extern void __LIB__ msleep(unsigned int milliseconds);
 #ifndef __STDC_ABI_ONLY
+extern int __LIB__  msleep_fastcall (unsigned int milliseconds) __z88dk_fastcall;
+#define msleep(x) msleep_fastcall(x)
+#elif defined(__LLVMZ80)
+/* The plain entry reads its argument from the stack; llvmz80 passes it in HL. */
 extern int __LIB__  msleep_fastcall (unsigned int milliseconds) __z88dk_fastcall;
 #define msleep(x) msleep_fastcall(x)
 #endif
@@ -386,7 +422,13 @@ extern unsigned long __LIB__   extract_bits_callee(unsigned char *data, unsigned
 __ZPROTO2(int,,wcmatch,char,*wildname,char *,filename)
 
 // Convert a BCD encoded value to unsigned int
-extern unsigned int __LIB__ unbcd(unsigned int value);
+// unbcd.c is __naked asm that pops its argument off the stack (smallc
+// convention); __smallc makes clang pass it that way too (sdcccall(0)).
+// It is a no-op for sccz80/SDCC (their own native calling-convention
+// keyword, already their default), matching the pattern used unconditionally
+// on extract_bits above.  Without it, llvmz80's default sdcccall(1)
+// register-passes the arg and unbcd() always returns 0.
+extern unsigned int __LIB__ unbcd(unsigned int value) __smallc;
 
 #ifdef __Z88__
 extern int system(const char *text);              /* should this be in the z88 library? */

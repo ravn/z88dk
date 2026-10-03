@@ -78,8 +78,21 @@ extern void __LIB__    mallinfo_callee(unsigned int *total, unsigned int *larges
 #define free(x)        free_fastcall(x)
 #define sbrk(a,b)      sbrk_callee(a,b)
 #define calloc(a,b)    calloc_callee(a,b)
-#define realloc(a,b)   realloc_callee(a,b)
+#define realloc(a,b)   realloc_callee(a,b)  /* Preserve the worker's p,size order. */
 #define mallinfo(a,b)  mallinfo_callee(a,b)
+#endif
+
+#if defined(__STDC_ABI_ONLY) && defined(__LLVMZ80)
+/* Under __STDC_ABI_ONLY, use register entries for malloc/free and the existing
+ * callee-clean entries for calloc/realloc. Other heap calls keep __ZPROTO. */
+extern void __LIB__    *malloc_fastcall(unsigned int size) __z88dk_fastcall;
+extern void __LIB__    free_fastcall(void *addr) __z88dk_fastcall;
+extern void __LIB__    *calloc_callee(unsigned int nobj, unsigned int size) __smallc __z88dk_callee;
+extern void __LIB__    *realloc_callee(void *p, unsigned int size) __smallc __z88dk_callee;
+#define malloc(x)      malloc_fastcall(x)
+#define free(x)        free_fastcall(x)
+#define calloc(a,b)    calloc_callee(a,b)
+#define realloc(a,b)   realloc_callee(a,b)  /* Preserve the worker's p,size order. */
 #endif
 
 // The following is to allow programs using the
