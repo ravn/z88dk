@@ -1,15 +1,9 @@
 #!/bin/sh
 # Reproducible benchmark: math32 vs compiler-rt, all f32 libcalls, incl. the
-# -ffast-math compare variant (___cmpsf2_fast). ravn/llvm-z80 #277.
+# -ffast-math compare variant. ravn/llvm-z80#277.
 #
-# This is the SCRIPT form of the numbers quoted in
-# z88dk/libsrc/l/llvmz80/MATH32_BRIDGE.md (Sec. 5, Sec. 5a) and
-# llvm-z80/tasks/design-2026-07-31-float32-math32-strategy.md (Sec. 9b, 9c).
-# Those numbers were originally produced by ad-hoc /tmp commands that were
-# cleaned up afterwards -- not reproducible. This script exists so anyone can
-# regenerate (and thus re-verify) that table from scratch, and so future
-# backend/bridge changes can be checked against it directly instead of
-# trusting a frozen table.
+# Measures the current native math32 path against standalone compiler-rt.
+# Timings include loop/caller overhead; they are not isolated core timings.
 #
 # Method for each op:
 #   math32 side:      the REAL production pipeline, `zcc +cpm
@@ -42,16 +36,7 @@ WORKSPACE_ROOT=$(cd "$DIR/../../.." && pwd)
 
 fail() { echo "ERROR: $*" >&2; exit 1; }
 
-if [ -n "${LLVMZ80EXE:-}" ]; then
-	[ -x "$LLVMZ80EXE" ] || fail "LLVMZ80EXE is not executable: $LLVMZ80EXE"
-	LLVMZ80EXE=$(cd "$(dirname "$LLVMZ80EXE")" && pwd)/$(basename "$LLVMZ80EXE")
-	LLVM_Z80_BUILD=${LLVM_Z80_BUILD:-$(cd "$(dirname "$LLVMZ80EXE")/.." && pwd)}
-else
-	LLVM_Z80_BUILD=${LLVM_Z80_BUILD:-"$WORKSPACE_ROOT/llvm-z80/build-macos-asserts"}
-	LLVMZ80EXE="$LLVM_Z80_BUILD/bin/clang"
-fi
-export LLVM_Z80_BUILD LLVMZ80EXE
-[ -f "$DIR/test_env.sh" ] && . "$DIR/test_env.sh"
+. "$DIR/test_env.sh"
 MATH32_DIR="$DIR/../../libsrc"
 TICKS_CPM="$WORKSPACE_ROOT/scratch/dcc-clang-bench/ticks_cpm.py"
 
@@ -205,6 +190,6 @@ run_op compare 'r = (a < b);'  'r = (a < b);'  "$RT_LIB/cmpsf2.o"
 run_op f2i     'r = (int)fa;'  'r = (int)fa;'  "$RT_LIB/fixsfsi.o"
 run_op i2f     'rf = (float)ia;' 'rf = (float)ia;' "$RT_LIB/floatsisf.o"
 echo ""
-echo "=== -ffast-math compare (___cmpsf2_fast) ==="
+echo "=== -ffast-math compare ==="
 run_op compare_fast 'r = (a < b);' 'r = (a < b);' "$RT_LIB/cmpsf2.o" "-ffast-math" "-ffast-math"
 echo "PASS: bench_math32_vs_compilerrt"

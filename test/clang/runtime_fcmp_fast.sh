@@ -8,7 +8,7 @@
 #        "ALL PASS". NaN inputs are outside the current runtime-test policy.
 #
 # See runtime_fcmp.sh for the finite-only, non-fast-math sibling test and
-# the shared -mllvm -z80-float-sdcccall0 / -lmath32 requirement story.
+# the shared Z88DK-triple / math32 library setup.
 #
 # Usage: ZCCCFG=<z88dk>/lib/config PATH=<z88dk>/bin:$PATH \
 #        NTVCM=/path/to/ntvcm LLVMZ80EXE=/path/to/clang ./runtime_fcmp_fast.sh

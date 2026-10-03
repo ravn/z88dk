@@ -3,8 +3,7 @@
 # ravn/llvm-z80 #277. Companion to bench_math32_vs_compilerrt.sh (which
 # measures T-states/call, not bytes).
 #
-# Question: div is ~2.3x faster via compiler-rt (see MATH32_BRIDGE.md Sec 5),
-# but which is smaller in CODE SIZE? On a byte-constrained target (e.g. an
+# Which division closure is smaller? On a byte-constrained target (e.g. an
 # RC700 2 KB PROM) that can matter as much as speed.
 #
 # Method: build a "baseline" program (same crt0/config, but NO float op) and
@@ -32,20 +31,10 @@ WORKSPACE_ROOT=$(cd "$DIR/../../.." && pwd)
 
 fail() { echo "ERROR: $*" >&2; exit 1; }
 
-if [ -n "${LLVMZ80EXE:-}" ]; then
-	[ -x "$LLVMZ80EXE" ] || fail "LLVMZ80EXE is not executable: $LLVMZ80EXE"
-	LLVMZ80EXE=$(cd "$(dirname "$LLVMZ80EXE")" && pwd)/$(basename "$LLVMZ80EXE")
-	LLVM_Z80_BUILD=${LLVM_Z80_BUILD:-$(cd "$(dirname "$LLVMZ80EXE")/.." && pwd)}
-else
-	LLVM_Z80_BUILD=${LLVM_Z80_BUILD:-"$WORKSPACE_ROOT/llvm-z80/build-macos-asserts"}
-	LLVMZ80EXE="$LLVM_Z80_BUILD/bin/clang"
-fi
-export LLVM_Z80_BUILD LLVMZ80EXE
-[ -f "$DIR/test_env.sh" ] && . "$DIR/test_env.sh"
+. "$DIR/test_env.sh"
 MATH32_DIR="$DIR/../../libsrc"
 
 command -v zcc >/dev/null 2>&1 || fail "zcc not found on PATH"
-command -v python3 >/dev/null 2>&1 || fail "python3 not found on PATH"
 [ -x "$LLVMZ80EXE" ] || fail "missing llvm-z80 clang: $LLVMZ80EXE"
 CLANG="$LLVMZ80EXE"
 LLD="$LLVM_Z80_BUILD/bin/ld.lld"

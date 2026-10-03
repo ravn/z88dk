@@ -1,6 +1,6 @@
 #!/bin/sh
 # Shared environment resolution for test/clang/*.sh scripts.
-# Discovers repo-relative paths for zcc, ZCCCFG, LLVMZ80EXE, and NTVCM so
+# Discovers repo-relative paths for zcc, ZCCCFG, LLVMZ80EXE, LLVM_Z80_BUILD and NTVCM so
 # test scripts can be run standalone with `bash test/clang/<test>.sh` without
 # requiring manual PATH or env setup.
 
@@ -22,8 +22,16 @@ if [ -z "$ZCCCFG" ] && [ -d "$_REPO_ROOT/lib/config" ]; then
 fi
 
 # 3. LLVMZ80EXE
-if [ -z "$LLVMZ80EXE" ] || ! [ -x "$LLVMZ80EXE" ]; then
+if [ -z "$LLVMZ80EXE" ] && [ -n "$LLVM_Z80_BUILD" ]; then
+    LLVMZ80EXE="$LLVM_Z80_BUILD/bin/clang"
+fi
+if [ -n "$LLVMZ80EXE" ] && [ ! -x "$LLVMZ80EXE" ]; then
+    echo "ERROR: LLVMZ80EXE is not executable: $LLVMZ80EXE" >&2
+    return 1
+fi
+if [ -z "$LLVMZ80EXE" ]; then
     for _cand in \
+        "$_WORKSPACE_ROOT/llvm-z80/build-macos-asserts/bin/clang" \
         "$_REPO_ROOT/bin/llvmz80-clang" \
         "$_WORKSPACE_ROOT/llvm-z80/build-macos/bin/clang" \
         "$_WORKSPACE_ROOT/llvm-z80/build/bin/clang" \
@@ -34,6 +42,11 @@ if [ -z "$LLVMZ80EXE" ] || ! [ -x "$LLVMZ80EXE" ]; then
             break
         fi
     done
+fi
+if [ -n "$LLVMZ80EXE" ]; then
+    LLVMZ80EXE=$(cd "$(dirname "$LLVMZ80EXE")" && pwd)/$(basename "$LLVMZ80EXE")
+    LLVM_Z80_BUILD=${LLVM_Z80_BUILD:-$(cd "$(dirname "$LLVMZ80EXE")/.." && pwd)}
+    export LLVMZ80EXE LLVM_Z80_BUILD
 fi
 
 # 4. NTVCM emulator

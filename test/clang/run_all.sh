@@ -11,7 +11,6 @@
 set -e
 
 DIR=$(cd "$(dirname "$0")" && pwd)
-[ -f "$DIR/test_env.sh" ] && . "$DIR/test_env.sh"
 SELF=$(basename "$0")
 
 # ---- locate environment via test_env.sh ----

@@ -5,8 +5,7 @@
 # NaNs are outside the current runtime-test policy; runtime_fcmp.c covers
 # finite values only. A wrong native-symbol mapping/result fails a chk().
 #
-# See runtime_float.sh for the shared -mllvm -z80-float-sdcccall0 / -lmath32
-# requirement story (identical here).
+# The Z88DK triple selects existing math32 predicates; -lm links math32.
 #
 # Usage: ZCCCFG=<z88dk>/lib/config PATH=<z88dk>/bin:$PATH \
 #        NTVCM=/path/to/ntvcm LLVMZ80EXE=/path/to/clang ./runtime_fcmp.sh
