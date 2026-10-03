@@ -25,6 +25,7 @@
 #define __at(x)
 #define __sfr
 #define __vasmallc
+#define __z88dk_callback
 
 #else
 
@@ -49,6 +50,10 @@
 #if __clang__ | __XCC
 #define __preserves_regs(x...)
 #endif
+
+// Classic-library callback thunks use sdcccall(0); other compilers already
+// use that default.
+#define __z88dk_callback
 
 #if __SDCC
 // __smallconly is for functions that only come in a smallc variant
@@ -75,6 +80,9 @@
 #if defined(__LLVMZ80)
 #undef  __vasmallc
 #define __vasmallc __attribute__((sdcccall(0)))
+// Callback thunks pass stack args right-to-left, not as __smallc does.
+#undef  __z88dk_callback
+#define __z88dk_callback __attribute__((sdcccall(0)))
 #endif
 #endif
 
@@ -84,6 +92,8 @@
 #define __smallconly __smallc
 #define __vasmallc __smallc
 #define __z88dk_deprecated
+// sccz80's default already matches classic-library callbacks.
+#define __z88dk_callback
 #endif
 
 #endif
