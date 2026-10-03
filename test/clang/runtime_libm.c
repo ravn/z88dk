@@ -1,15 +1,9 @@
-/* Runtime fixture for the ravn/llvm-z80 transcendental libm routing
- * (include/math/math_math32.h: `#define exp(x) exp_fastcall(x)` now fires for
- * llvmz80/z80, sending clang to the register-ABI _m32_*f cores via z80_fastcall).
- *
- * Without that routing clang defines __STDC_ABI_ONLY, falls through to the plain
- * stack-wrapper entries, passes the f32 arg in registers, and every check below
- * gets garbage (0) -> FAIL.  See ../../support/benchmarks/whetstone/WHETSTONE_LLVMZ80_FINDING.md.
+/* Runtime fixture for libm entry points provided by z88dk math32.
  *
  * Float printf is unreliable on the classic/llvmz80 path, so we scale each
  * result by 1e4, truncate to int, and compare against a reference with a small
  * tolerance (last-ULP differences between libm implementations are expected).
- * sqrt is included as the control that already worked before the bridge.
+ * sqrt is included as a control alongside the transcendental functions.
  */
 #include <stdio.h>
 #include <math.h>

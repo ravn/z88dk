@@ -7,7 +7,7 @@
 #
 # Method for each op:
 #   math32 side:      the REAL production pipeline, `zcc +cpm
-#                      -compiler=llvmz80 -lmath32`, N=2000 loop, ticks_cpm.py
+#                      -compiler=llvmz80 --math32`, N=2000 loop, ticks_cpm.py
 #                      on the .com. zcc selects
 #                      --target=z80-unknown-none-z88dk, which lowers float
 #                      libcalls to the existing cm32_sdcc_* runtime entries.
@@ -37,7 +37,6 @@ WORKSPACE_ROOT=$(cd "$DIR/../../.." && pwd)
 fail() { echo "ERROR: $*" >&2; exit 1; }
 
 . "$DIR/test_env.sh"
-MATH32_DIR="$DIR/../../libsrc"
 TICKS_CPM="$WORKSPACE_ROOT/scratch/dcc-clang-bench/ticks_cpm.py"
 
 command -v zcc >/dev/null 2>&1 || fail "zcc not found on PATH"
@@ -91,8 +90,7 @@ bench_math32() {
 	    return r + (int)rf;
 	}
 	EOF
-	if ! zcc +cpm -compiler=llvmz80 -O2 $extra -create-app \
-		-L"$MATH32_DIR" -lmath32 \
+	if ! zcc +cpm -compiler=llvmz80 --math32 -O2 $extra -create-app \
 		-o "$WORK/m32_$label" "$src" >"$WORK/m32_$label.log" 2>&1; then
 		echo "BUILD FAILED ($label, math32):"; cat "$WORK/m32_$label.log"; exit 1
 	fi

@@ -25,7 +25,7 @@ fail() { echo "FAIL: $1"; exit 1; }
 
 # NOTE: deliberately NO -Dpragma and NO manual converter selection -- this
 # proves the -autoformat pass picks the classic %f/%e/%g converters by itself.
-if ! zcc +cpm -compiler=llvmz80 -O2 -lm \
+if ! zcc +cpm -compiler=llvmz80 --math32 -O2 \
         -create-app -o "$WORK/rt" "$SRC" >"$WORK/build.log" 2>&1; then
     echo "--- build log ---"; cat "$WORK/build.log"
     fail "zcc build failed"

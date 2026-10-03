@@ -68,7 +68,7 @@ case "$COMPILE_LINE" in
 esac
 
 # ---- 2. Behaviour is unchanged: double arithmetic still runs correctly ----
-if ! zcc +cpm -compiler=llvmz80 -create-app -lm -o "$WORK/rt" "$WORK/t.c" \
+if ! zcc +cpm -compiler=llvmz80 --math32 -create-app -o "$WORK/rt" "$WORK/t.c" \
         >"$WORK/build2.log" 2>&1; then
     echo "--- build log ---"; cat "$WORK/build2.log"
     fail "zcc full build failed"

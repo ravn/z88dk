@@ -1,13 +1,9 @@
-/* Thorough runtime test for the ravn/llvm-z80 clang 32-bit float bridges
- * (libsrc/l/llvmz80/__addsf3.asm -> z88dk math32).  ravn/llvm-z80 #277.
+/* Runtime test for the z88dk-triple binary32 arithmetic lowering,
+ * ravn/llvm-z80 #277.
  *
- * With double==float==binary32, clang lowers arithmetic to __addsf3/__subsf3/
- * __mulsf3/__divsf3.  This test checks each by BIT PATTERN (memcpy the result
- * to a u32 and compare to the IEEE-754 bits of the expected value), so it
- * depends on NOTHING but the arithmetic bridges -- no float<->int conversion,
- * no printf("%f").  Operands are volatile to defeat constant folding, forcing
- * a real libcall.  Order-sensitive cases (sub, div) are tested both ways to
- * catch an operand-order bug in the bridge.
+ * The triple lowers arithmetic to existing cm32_sdcc_* runtime entries. This
+ * checks exact results by bit pattern and forces runtime calls with volatile
+ * operands; subtraction and division are tested in both operand orders.
  */
 #include <stdio.h>
 #include <string.h>
@@ -17,6 +13,14 @@ typedef unsigned long u32;
 static int fails = 0;
 
 static u32 bits(float f) { u32 x; memcpy(&x, &f, 4); return x; }
+
+static void chk_bits(const char *name, float got, u32 want) {
+    u32 g = bits(got);
+    if (g != want) {
+        printf("FAIL %s: got %08lx want %08lx\n", name, g, want);
+        fails++;
+    }
+}
 
 static void chk(const char *name, float got, float want) {
     u32 g = bits(got), w = bits(want);
@@ -30,6 +34,9 @@ static void chk(const char *name, float got, float want) {
 static volatile float f2 = 2.0f, f4 = 4.0f, f6 = 6.0f, f8 = 8.0f;
 static volatile float fhalf = 0.5f, fquarter = 0.25f, f1 = 1.0f, f1_5 = 1.5f;
 static volatile float fneg3 = -3.0f, f3 = 3.0f, fneg8 = -8.0f;
+static volatile float fzero = 0.0f;
+static volatile union { u32 u; float f; } qnan = { 0x7fc00000UL };
+static volatile union { u32 u; float f; } pinf = { 0x7f800000UL };
 
 int main(void) {
     /* add (commutative) */
@@ -52,15 +59,31 @@ int main(void) {
     chk("div.rev",   f2 / f8,   0.25f);  /* catches b/a bug */
     chk("div.frac",  f1 / f4,   0.25f);
     chk("div.neg",   fneg8 / f2, -4.0f); /* exactly representable quotient */
-    /* NOTE: math32 divides via a Newton-Raphson reciprocal (a/b = a*(1/b)),
-     * so a/b can differ from a correctly-rounded quotient by ~1 ULP when 1/b
-     * is inexact (e.g. -3.0f/3.0f -> 0xbf800001 instead of 0xbf800000).  That
-     * is a math32 numerics property, not a bridge bug, so this bridge test uses
-     * exactly-representable quotients only. */
+    /* Restrict division checks to exactly representable quotients: math32's
+     * reciprocal-based division can differ by one ULP for other inputs. */
 
     /* signs */
     chk("mul.neg",   fneg3 * f2, -6.0f);
     chk("add.neg",   fneg3 + f3,  0.0f);
+
+    /* z88dk documents canonical quiet-NaN output as 0x7fffffff. */
+    chk_bits("nan.add.left",  qnan.f + f2, 0x7fffffffUL);
+    chk_bits("nan.add.right", f2 + qnan.f, 0x7fffffffUL);
+    chk_bits("nan.sub.left",  qnan.f - f2, 0x7fffffffUL);
+    chk_bits("nan.sub.right", f2 - qnan.f, 0x7fffffffUL);
+    chk_bits("nan.mul.left",  qnan.f * f2, 0x7fffffffUL);
+    chk_bits("nan.mul.right", f2 * qnan.f, 0x7fffffffUL);
+    chk_bits("nan.div.left",  qnan.f / f2, 0x7fffffffUL);
+    chk_bits("nan.div.right", f2 / qnan.f, 0x7fffffffUL);
+
+    /* Invalid operations yield NaN; infinite results are controls. */
+    chk_bits("invalid.zero_times_inf", fzero * pinf.f, 0x7fffffffUL);
+    chk_bits("invalid.zero_div_zero", fzero / fzero, 0x7fffffffUL);
+    chk_bits("invalid.inf_div_inf", pinf.f / pinf.f, 0x7fffffffUL);
+    chk_bits("invalid.inf_minus_inf", pinf.f - pinf.f, 0x7fffffffUL);
+    chk_bits("inf.plus_finite", pinf.f + f2, 0x7f800000UL);
+    chk_bits("inf.finite_div_zero", f2 / fzero, 0x7f800000UL);
+    chk_bits("inf.finite_div_inf", f2 / pinf.f, 0x00000000UL);
 
     if (fails == 0)
         printf("ALL PASS\n");

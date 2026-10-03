@@ -11,8 +11,7 @@
 # pipeline, then diff the linked artifact sizes. The delta isolates the
 # division closure itself from fixed crt0/startup/config overhead that both
 # programs pay equally.
-#   math32 side:      real zcc pipeline (`+cpm -compiler=llvmz80
-#                      -L<libsrc> -lmath32`); its
+#   math32 side:      real zcc pipeline (`+cpm -compiler=llvmz80 --math32`); its
 #                      --target=z80-unknown-none-z88dk lowering calls the
 #                      existing cm32_sdcc_fsdiv runtime entry; .com size.
 #   compiler-rt side:  standalone freestanding binary (no z88dk crt0),
@@ -32,7 +31,6 @@ WORKSPACE_ROOT=$(cd "$DIR/../../.." && pwd)
 fail() { echo "ERROR: $*" >&2; exit 1; }
 
 . "$DIR/test_env.sh"
-MATH32_DIR="$DIR/../../libsrc"
 
 command -v zcc >/dev/null 2>&1 || fail "zcc not found on PATH"
 [ -x "$LLVMZ80EXE" ] || fail "missing llvm-z80 clang: $LLVMZ80EXE"
@@ -73,8 +71,7 @@ build_math32() {
 	    return 0;
 	}
 	EOF
-	if ! zcc +cpm -compiler=llvmz80 -O2 -create-app \
-		-L"$MATH32_DIR" -lmath32 \
+	if ! zcc +cpm -compiler=llvmz80 --math32 -O2 -create-app \
 		-o "$WORK/m32_$label" "$src" >"$WORK/m32_$label.log" 2>&1; then
 		echo "BUILD FAILED (m32 $label):"; cat "$WORK/m32_$label.log"; exit 1
 	fi

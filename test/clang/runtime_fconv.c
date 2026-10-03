@@ -1,11 +1,9 @@
-/* Thorough runtime test for the ravn/llvm-z80 clang int<->f32 conversion
- * bridges (libsrc/l/llvmz80/__floatsisf.asm -> z88dk math32).  ravn/llvm-z80
- * #277 (follow-up to runtime_float.c).
+/* Runtime test for the z88dk-triple int<->f32 conversion lowering,
+ * ravn/llvm-z80 #277 (follow-up to runtime_float.c).
  *
- * Covers signed/unsigned conversions both ways, with volatile operands (to
- * defeat constant folding and force real libcalls) and boundary values: zero,
- * negative, INT16_MIN/MAX, and values that don't survive a 16<->32-bit
- * round-trip identically for unsigned (e.g. 0xFFFF).
+ * Existing cm32_sdcc_* runtime entries provide the conversions. Volatile
+ * operands force runtime calls; boundary values cover signed and unsigned
+ * conversion cases.
  *
  * float->int results are checked by exact integer equality (no bit-pattern
  * trick needed, unlike float results). int->float results are checked by
