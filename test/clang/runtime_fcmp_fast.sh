@@ -7,7 +7,7 @@
 #        the existing z88dk math32 library, and running it in ntvcm prints
 #        "ALL PASS". NaN inputs are outside the current runtime-test policy.
 #
-# See runtime_fcmp.sh for the finite-only, non-fast-math sibling test and
+# See runtime_fcmp.sh for the NaN-aware, non-fast-math sibling test and
 # the shared Z88DK-triple / math32 library setup.
 #
 # Usage: ZCCCFG=<z88dk>/lib/config PATH=<z88dk>/bin:$PATH \

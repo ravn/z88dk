@@ -2,10 +2,9 @@
 # Runtime test for the ravn/llvm-z80 f32 compare lowering to z88dk math32.
 # ravn/llvm-z80 #277.
 #
-# NaNs are outside the current runtime-test policy; runtime_fcmp.c covers
-# finite values only. A wrong native-symbol mapping/result fails a chk().
+# runtime_fcmp.c covers finite controls and NaN inputs in either position.
 #
-# The Z88DK triple selects existing math32 predicates; -lm links math32.
+# The Z88DK triple selects existing math32 entries; --math32 links math32.
 #
 # Usage: ZCCCFG=<z88dk>/lib/config PATH=<z88dk>/bin:$PATH \
 #        NTVCM=/path/to/ntvcm LLVMZ80EXE=/path/to/clang ./runtime_fcmp.sh
@@ -23,7 +22,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 fail() { echo "FAIL: $1"; exit 1; }
 
-if ! zcc +cpm -compiler=llvmz80 ${ZCC_CLIB:-} -O2 -create-app -lm \
+if ! zcc +cpm -compiler=llvmz80 ${ZCC_CLIB:-} -Cg-O2 -create-app --math32 \
 	-o "$WORK/rt" "$SRC" >"$WORK/build.log" 2>&1; then
 	echo "--- build log ---"; cat "$WORK/build.log"
 	fail "zcc build failed"
@@ -34,4 +33,4 @@ OUT=$("$NTVCM" "$WORK/RT.COM" 2>/dev/null | tr -d '\r')
 
 echo "$OUT" | grep -qF "ALL PASS" || fail "compare output wrong. got: [$OUT]"
 
-echo "PASS: llvmz80 f32 comparisons link to z88dk math32 and behave for finite values"
+echo "PASS: llvmz80 f32 comparisons link to z88dk math32 and preserve NaN semantics"
