@@ -2,7 +2,7 @@
 # Master runner for the ravn/llvm-z80 + z88dk integration test suite.
 #
 # Auto-detects LLVMZ80EXE and NTVCM from environment or well-known paths,
-# then runs every *.sh in this directory (except itself).
+# then runs every test *.sh in test/clang and test/llvmz80.
 #
 # Exit code: 0 if all tests PASS or SKIP, 1 if any FAILs.
 #
@@ -170,10 +170,12 @@ newlib_skip_reason() {
 
 # Count testable scripts up front so each line can show N/total progress.
 TOTAL=0
-for script in "$DIR"/*.sh; do
-    _n=$(basename "$script")
-    case "$_n" in "$SELF"|run_all.sh|run_matrix.sh|test_env.sh) continue ;; esac
-    TOTAL=$((TOTAL + 1))
+for test_dir in "$DIR" "$DIR/../llvmz80"; do
+    for script in "$test_dir"/*.sh; do
+        _n=$(basename "$script")
+        case "$_n" in "$SELF"|run_all.sh|run_matrix.sh|test_env.sh) continue ;; esac
+        TOTAL=$((TOTAL + 1))
+    done
 done
 DONE=0
 SUITE_START=$(date +%s)
@@ -182,70 +184,70 @@ SUITE_START=$(date +%s)
 tally() { printf '        tally: %d pass  %d fail  %d skip  %d xfail   (%d/%d done)\n' \
                  "$PASS" "$FAIL" "$SKIP" "$XFAIL" "$DONE" "$TOTAL"; }
 
-for script in "$DIR"/*.sh; do
-    name=$(basename "$script")
-    # Skip harness scripts, not just this file: run_matrix.sh calls run_all.sh,
-    # so treating it as a test would recurse infinitely (a fork bomb).
-    case "$name" in
-        "$SELF"|run_all.sh|run_matrix.sh|test_env.sh) continue ;;
-    esac
+for test_dir in "$DIR" "$DIR/../llvmz80"; do
+    for script in "$test_dir"/*.sh; do
+        name=$(basename "$script")
+        # Skip harness scripts, not just this file: run_matrix.sh calls
+        # run_all.sh, so treating it as a test recurses infinitely.
+        case "$name" in
+            "$SELF"|run_all.sh|run_matrix.sh|test_env.sh) continue ;;
+        esac
 
-    if [ "$TEST_CLIB" != "classic" ]; then
-        if reason=$(newlib_skip_reason "$name"); then
-            DONE=$((DONE + 1))
-            echo "[$DONE/$TOTAL] skip  $name (newlib: $reason)"
-            SKIP=$((SKIP + 1))
-            tally
-            continue
+        if [ "$TEST_CLIB" != "classic" ]; then
+            if reason=$(newlib_skip_reason "$name"); then
+                DONE=$((DONE + 1))
+                echo "[$DONE/$TOTAL] skip  $name (newlib: $reason)"
+                SKIP=$((SKIP + 1))
+                tally
+                continue
+            fi
         fi
-    fi
 
-    DONE=$((DONE + 1))
-    # In-flight line (printed BEFORE the test runs): if a test wedges, you can
-    # see which one is in flight during the up-to-TEST_TIMEOUT wait.
-    echo "[$DONE/$TOTAL] run   $name ..."
+        DONE=$((DONE + 1))
+        # In-flight line (printed BEFORE the test runs): if a test wedges, you
+        # can see which one is in flight during the up-to-TEST_TIMEOUT wait.
+        echo "[$DONE/$TOTAL] run   $name ..."
 
-    _tout=$(mktemp)
-    _t0=$(date +%s)
-    if run_one "$script" "$_tout"; then
-        result=$(tail -1 "$_tout")
-    else
-        result="__TIMEOUT__"
-    fi
-    _dt=$(( $(date +%s) - _t0 ))
-    rm -f "$_tout"
+        _tout=$(mktemp)
+        _t0=$(date +%s)
+        if run_one "$script" "$_tout"; then
+            result=$(tail -1 "$_tout")
+        else
+            result="__TIMEOUT__"
+        fi
+        _dt=$(( $(date +%s) - _t0 ))
+        rm -f "$_tout"
 
-    case "$result" in
-        __TIMEOUT__)
-            echo "[$DONE/$TOTAL] FAIL  $name -- TIMEOUT: killed after ${_limit}s (hang)"
-            FAIL=$((FAIL + 1))
-            ;;
-        PASS:*|PASS\ *)
-            echo "[$DONE/$TOTAL] PASS  $name (${_dt}s)"
-            PASS=$((PASS + 1))
-            ;;
-        # XFAIL: a known, documented gap that is EXPECTED to fail (e.g. a
-        # deliberately-absent classic-clib function).  Ignored — not a failure.
-        XFAIL:*|XFAIL\ *)
-            echo "[$DONE/$TOTAL] xfail $name ($result)"
-            XFAIL=$((XFAIL + 1))
-            ;;
-        # XPASS: an xfail test that UNEXPECTEDLY succeeded — the gap closed;
-        # surface it so the xfail note can be retired.  Counts as a failure.
-        XPASS:*|XPASS\ *)
-            echo "[$DONE/$TOTAL] XPASS $name -- $result  (unexpected: gap closed, retire the xfail)"
-            FAIL=$((FAIL + 1))
-            ;;
-        SKIP:*|SKIP\ *)
-            echo "[$DONE/$TOTAL] skip  $name ($result)"
-            SKIP=$((SKIP + 1))
-            ;;
-        *)
-            echo "[$DONE/$TOTAL] FAIL  $name -- $result"
-            FAIL=$((FAIL + 1))
-            ;;
-    esac
-    tally
+        case "$result" in
+            __TIMEOUT__)
+                echo "[$DONE/$TOTAL] FAIL  $name -- TIMEOUT: killed after ${_limit}s (hang)"
+                FAIL=$((FAIL + 1))
+                ;;
+            PASS:*|PASS\ *)
+                echo "[$DONE/$TOTAL] PASS  $name (${_dt}s)"
+                PASS=$((PASS + 1))
+                ;;
+            # XFAIL: a known, documented gap that is EXPECTED to fail.
+            XFAIL:*|XFAIL\ *)
+                echo "[$DONE/$TOTAL] xfail $name ($result)"
+                XFAIL=$((XFAIL + 1))
+                ;;
+            # XPASS: the known gap unexpectedly succeeded; surface it.
+            XPASS:*|XPASS\ *)
+                echo "[$DONE/$TOTAL] XPASS $name -- $result (retire the xfail)"
+                FAIL=$((FAIL + 1))
+                ;;
+            SKIP:*|SKIP\ *)
+                echo "[$DONE/$TOTAL] skip  $name ($result)"
+                SKIP=$((SKIP + 1))
+                ;;
+            *)
+                echo "[$DONE/$TOTAL] FAIL  $name -- $result"
+                FAIL=$((FAIL + 1))
+                ;;
+        esac
+        tally
+    done
 done
 
 _suite_dt=$(( $(date +%s) - SUITE_START ))

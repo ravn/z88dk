@@ -1,8 +1,7 @@
 #!/bin/sh
-# Shared environment resolution for test/clang/*.sh scripts.
+# Shared environment resolution for test/clang/ and test/llvmz80/ scripts.
 # Discovers repo-relative paths for zcc, ZCCCFG, LLVMZ80EXE, LLVM_Z80_BUILD and NTVCM so
-# test scripts can be run standalone with `bash test/clang/<test>.sh` without
-# requiring manual PATH or env setup.
+# tests can be run standalone without requiring manual PATH or env setup.
 
 _ENV_DIR="${DIR:-$(cd "$(dirname "$0")" && pwd)}"
 _REPO_ROOT=$(cd "$_ENV_DIR/../.." 2>/dev/null && pwd)
