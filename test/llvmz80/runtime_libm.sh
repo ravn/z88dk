@@ -19,6 +19,7 @@ command -v "$NTVCM" >/dev/null 2>&1 || { echo "SKIP: ntvcm not found (set NTVCM)
 WORK=$(mktemp -d "$Z80_TEST_TMPDIR/llvmz80-libm.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT HUP INT TERM
 mkdir "$WORK/tmp"
+cd "$WORK"
 fail() { echo "FAIL: $1"; exit 1; }
 
 if ! TMPDIR="$WORK/tmp" "$ZCC" +cpm -compiler=llvmz80 ${ZCC_CLIB:-} -Cg-O3 -create-app --math32 \
@@ -28,7 +29,11 @@ if ! TMPDIR="$WORK/tmp" "$ZCC" +cpm -compiler=llvmz80 ${ZCC_CLIB:-} -Cg-O3 -crea
 fi
 [ -f "$WORK/RT.COM" ] || fail "no .com produced"
 
-OUT=$(TMPDIR="$WORK/tmp" "$NTVCM" "$WORK/RT.COM" 2>/dev/null | tr -d '\r')
+if ! OUT=$(TMPDIR="$WORK/tmp" "$NTVCM" "$WORK/RT.COM" 2>"$WORK/run.log"); then
+	cat "$WORK/run.log"
+	fail "ntvcm run failed"
+fi
+OUT=$(printf '%s\n' "$OUT" | tr -d '\r')
 
 echo "$OUT" | grep -qF "ALL PASS" || fail "libm output wrong. got: [$OUT]"
 

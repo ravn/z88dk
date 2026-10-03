@@ -38,7 +38,12 @@ fi
     exit 1
 }
 
-OUT=$(TMPDIR="$WORK/tmp" "$NTVCM" "$WORK/RT.COM" 2>/dev/null | tr -d '\r')
+if ! OUT=$(TMPDIR="$WORK/tmp" "$NTVCM" "$WORK/RT.COM" 2>"$WORK/run.log"); then
+    cat "$WORK/run.log"
+    echo "FAIL: ntvcm run failed"
+    exit 1
+fi
+OUT=$(printf '%s\n' "$OUT" | tr -d '\r')
 echo "$OUT" | grep -qxF "qsort -3,0,1,7,7" || {
     echo "FAIL: qsort callback ABI produced [$OUT]"
     exit 1

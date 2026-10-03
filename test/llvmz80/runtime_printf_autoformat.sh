@@ -38,7 +38,12 @@ command -v "$NTVCM" >/dev/null 2>&1 || {
     exit 0
 }
 
-OUT=$(TMPDIR="$WORK/tmp" "$NTVCM" "$WORK/RT.COM" 2>/dev/null | tr -d '\r')
+if ! OUT=$(TMPDIR="$WORK/tmp" "$NTVCM" "$WORK/RT.COM" 2>"$WORK/run.log"); then
+    cat "$WORK/run.log"
+    echo "FAIL: ntvcm run failed"
+    exit 1
+fi
+OUT=$(printf '%s\n' "$OUT" | tr -d '\r')
 echo "$OUT" | grep -qF "PASS autoformat" || {
     echo "FAIL: printf autoformat runtime output: [$OUT]"
     exit 1
