@@ -15,6 +15,14 @@ choices. Test artifacts are written under `Z80_TEST_TMPDIR` (default:
 inside its own temporary directory and removes that directory on exit,
 including failed builds and runtime checks.
 
+The llvmz80 driver defaults to `-fdefault-calling-conv=sdcccall0` for
+unannotated program functions. Override it with
+`-Cg-fdefault-calling-conv=sdcccall1`; user `-Cg` arguments follow the default.
+This requires an llvm-z80 build supporting these option values. Explicit
+library attributes and compiler runtime conventions retain their own ABIs.
+Compile all program translation units with a consistent convention.
+`zcc_backend_smoke` checks both option ordering and the emitted function ABI.
+
 `issue22_stdio_abi` and `issue23_fcntl_write` restore the classic file-I/O
 fixtures from `ravn-main:test/clang`. They create `A.DAT` (`hello\n`) and
 `WP.DAT` (`XYZ`) only inside their per-run directories. `runtime_workdir`
