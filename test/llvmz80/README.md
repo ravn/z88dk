@@ -32,3 +32,8 @@ and failed emulator runs, to guard working-directory isolation and cleanup.
 The runner executes each `*.sh` test in this directory except the runner and
 shared environment helper. Runtime scripts report `SKIP` when their required
 tools are unavailable.
+
+`z80asm_c_line_e2e` builds a debug-enabled CP/M Hello World with zcc and
+z80asm, checks the source-line symbols in its map, and runs it in ntvcm.
+It belongs here because it requires those external tools; the LLVM lit suite
+retains the self-contained `llc`/`FileCheck` checks for `C_LINE` emission.
