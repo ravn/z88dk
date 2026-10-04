@@ -15,13 +15,15 @@ choices. Test artifacts are written under `Z80_TEST_TMPDIR` (default:
 inside its own temporary directory and removes that directory on exit,
 including failed builds and runtime checks.
 
-The llvmz80 driver defaults to `-fdefault-calling-conv=sdcccall0` for
-unannotated program functions. Override it with
-`-Cg-fdefault-calling-conv=sdcccall1`; user `-Cg` arguments follow the default.
-This requires an llvm-z80 build supporting these option values. Explicit
-library attributes and compiler runtime conventions retain their own ABIs.
+The driver selects `z80-unknown-none-z88dk`; the compiler's target ABI
+defaults to `sdcccall(0)` for unannotated program functions. zcc does not
+inject a default-calling-convention flag. Override the target default with
+`-Cg-fdefault-calling-conv=sdcccall1` on a compiler supporting that option.
+Explicit library attributes and compiler runtime conventions retain their
+own ABIs.
 Compile all program translation units with a consistent convention.
-`zcc_backend_smoke` checks both option ordering and the emitted function ABI.
+`zcc_backend_smoke` checks the target triple, absence of an injected
+convention flag, and emitted default function ABI.
 
 `issue22_stdio_abi` and `issue23_fcntl_write` restore the classic file-I/O
 fixtures from `ravn-main:test/clang`. They create `A.DAT` (`hello\n`) and
