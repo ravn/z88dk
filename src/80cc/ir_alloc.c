@@ -90,11 +90,31 @@ static int cs_best_span(const Func *f, int v, const int *bb_first_op,
    later (the call-split's ranged BC home, ~2700 lines further down) was silently
    wiped, leaving IR_VREG_CALL_SPLIT set with phys == SPILL. Mirror it into the
    snapshot so it survives the revert. */
+static unsigned char *late_pair_home;   /* word BC/DE homes placed after the pick */
+static int reject_clash[16];            /* restored tenants sharing a late home's pair */
+static int n_reject_clash;
+
+int ir_alloc_word_home_clashes(int *out, int max)
+{
+    int n = n_reject_clash < max ? n_reject_clash : max;
+    for (int i = 0; i < n; i++) out[i] = reject_clash[i];
+    n_reject_clash = 0;
+    return n;
+}
+
+/* A home placed (or an occupant evicted) after the word DE-home pick must also
+   go into the pick's snapshot, or rejecting the pick restores a plan without it. */
 static void alloc_note_late_home(Func *f, int v, PhysReg pr)
 {
     f->vreg_to_phys[v] = pr;
-    if (word_home_prepick && v >= 0 && v < f->n_vregs)
+    if (word_home_prepick && v >= 0 && v < f->n_vregs) {
         word_home_prepick[v] = pr;
+        if (pr == IR_PR_BC || pr == IR_PR_DE) {
+            if (!late_pair_home)
+                late_pair_home = calloc((size_t)f->n_vregs, 1);
+            if (late_pair_home) late_pair_home[v] = 1;
+        }
+    }
 }
 
 /* ---- The word DE-home pick, and its one legal rejection -------------------
@@ -141,6 +161,25 @@ void ir_alloc_word_home_reject(Func *f)
             }
         }
     }
+    /* A WORD home placed after the pick (a call-split's ranged BC) took the
+       pair the pick vacated, and the restored tenant now shares it. Report the
+       restored tenant: the lowerer demotes it and re-arbitrates. */
+    n_reject_clash = 0;
+    for (int v = 0; late_pair_home && v < f->n_vregs; v++) {
+        PhysReg pv = f->vreg_to_phys[v];
+        int vlo, vhi;
+        if (!late_pair_home[v] || (pv != IR_PR_BC && pv != IR_PR_DE)) continue;
+        if (!hr_residency_window(f, v, &vlo, &vhi)) continue;
+        for (int w = 0; w < f->n_vregs; w++) {
+            int wlo, whi, seen = 0;
+            if (w == v || late_pair_home[w] || f->vreg_to_phys[w] != pv) continue;
+            if (!hr_residency_window(f, w, &wlo, &whi)) continue;
+            if (wlo > vhi || whi < vlo) continue;
+            for (int k = 0; k < n_reject_clash; k++) if (reject_clash[k] == w) seen = 1;
+            if (!seen && n_reject_clash < (int)(sizeof reject_clash / sizeof reject_clash[0]))
+                reject_clash[n_reject_clash++] = w;
+        }
+    }
     f->word_home_vreg = -1;
     f->de_home_general = 0;
     f->de_home_is_ptr = 0;
@@ -168,6 +207,8 @@ void ir_alloc_word_home_done(void)
 {
     free(word_home_prepick);
     word_home_prepick = NULL;
+    free(late_pair_home);
+    late_pair_home = NULL;
 }
 
 /* Returns 1 if the spill of op->dst at bb->ops[op_idx] is dead — its
@@ -203,7 +244,17 @@ static int op_dst_spill_is_dead(const BB *bb, int op_idx)
                      && use->mem.base == op->dst
                      && use->mem.post_step == 0
                      && use->src[0] != op->dst
-                     && use->src[1] != op->dst));
+                     && use->src[1] != op->dst)
+                 /* zero-arg near indirect call: target still in HL */
+                 || (use->kind == IR_CALL && use->call
+                     && use->call->fnptr_vreg == op->dst
+                     && use->call->target == NULL
+                     && use->call->n_args == 0
+                     && use->call->abi == IR_ABI_SMALLC
+                     && !use->call->far_fnptr
+                     && !use->call->ret_longlong
+                     && !use->call->is_critical
+                     && !use->call->returns_twice));
             if (!cache_served) return 0;
             allow_cache_hit = 0;
         }
@@ -333,6 +384,8 @@ int ir_home_requires_slot(const Func *f, int v)
     /* [dead-store] Written but never read: the store is skipped on the
        re-lower and the value rides A, so the frame can shrink. */
     if (f->vregs[v].flags & IR_VREG_DEAD_SPILL) needs = 0;
+    /* [dead-slot-drop] Never accessed in the last render. */
+    if (f->vregs[v].flags & IR_VREG_SLOT_UNUSED) needs = 0;
 
     return needs;
 }
@@ -433,6 +486,12 @@ static int alloc_veto[64];
 static int alloc_nveto;
 
 void ir_alloc_veto_reset(void) { alloc_nveto = 0; }
+
+/* [de-rearb] Set while the lowerer re-lowers a function whose word DE-home
+   pick it rejected: no DE-class home is proposed at all, so every later pack
+   sees DE and the pair the pick vacated as they would without the pick. */
+static int de_class_veto;
+void ir_alloc_de_veto(int on) { de_class_veto = on; }
 
 void ir_alloc_veto_add(int v)
 {
@@ -553,10 +612,11 @@ static long cs_span_benefit(const Func *f, int v, int lo, int hi,
     return ben;
 }
 
-/* Op-kinds whose width-2 lowering STAMPS a PR_BC dst into BC (end in
-   spill_and_swap_unless_dead / commit_hl_word → `ld bc,hl`). A write-many int
-   IV lives in BC only if EVERY def is such a kind (else a def elsewhere leaves
-   BC stale). Phase 2 IV-residency proposer. */
+/* Op-kinds whose width-2 lowering stamps a PR_BC dst into BC (`ld bc,hl`).
+   A write-many IV lives in BC only if every def is such a kind. Never add
+   IR_CALL/IR_HCALL: the IV proposer does not prove its span call-free, so a
+   call-result def would put BC across a call; bc_safe_producer_singledef
+   admits calls only where the span is proven call-free. */
 static int bc_safe_producer(int k)
 {
     switch (k) {
@@ -573,6 +633,22 @@ static int bc_safe_producer(int k)
     default:
         return 0;
     }
+}
+
+/* [callbc] A call result read two or more times in a call-free span takes a
+   BC home (one `ld bc,hl`) instead of a push/pop per read. Kept apart from
+   bc_safe_producer: its only callers (ir_bc_pack, ir_stack_spill) need
+   write_count==1 and check the span is call-free themselves.
+   IR_CALL only: IR_HCALL helpers have their own BC conventions (acc_store_bc)
+   that the span check does not model. ir_bc_pack also keeps call results from
+   evicting a BC tenant, and admits them only with two or more uses.
+   `--opt-disable=callbc` opts out. */
+static int bc_safe_producer_singledef(int k)
+{
+    if (bc_safe_producer(k)) return 1;
+    if (k == IR_CALL)
+        return !opt_disabled("callbc");
+    return 0;
 }
 
 /* True iff the function contains no call/helper-call/inline-asm op. Several
@@ -1090,13 +1166,13 @@ static int de_ptr_realizable(const Func *f, int v, const int *use_count,
    z80/gbz80/8085 ticks all faster-or-neutral). Opt out with IR_OFF=call-split
    (byte-identical to pre-flip). The dear-slot CPU gate (deref_gap>=15) inside
    the selection keeps cheap-slot CPUs byte-identical regardless. */
-static int callsplit_on(void) { static int c = -1; if (c < 0) c = !opt_disabled("call-split"); return c; }
+static int callsplit_on(void) { return !opt_disabled("call-split"); }
 
 /* [IR_OFF=iy-long] Opt OUT of running the IY packs in a function the BC veto
    excludes. They self-guard with a per-op op_clobbers IR_R_IY check over the
    candidate's live range, so the BC veto buys them nothing — it names another
    register's restriction. adr/0060. */
-static int iylong_off(void) { static int c = -1; if (c < 0) c = opt_disabled("iy-long"); return c; }
+static int iylong_off(void) { return opt_disabled("iy-long"); }
 
 /* [IR_CS_EVICT=0/1] Let a call-bounded split EVICT a picker-placed BC tenant it
    out-benefits, instead of silently losing BC to whoever the picker placed
@@ -1107,14 +1183,10 @@ static int iylong_off(void) { static int c = -1; if (c < 0) c = opt_disabled("iy
 static int prepushnarrow_on(void);
 static int cs_evict_on(void)
 {
-    static int c = -1;
-    if (c < 0) {
-        /* Follows prepush-narrow unless explicitly disabled. (The old
-           IR_CS_EVICT=1 could also force it ON against that default; nothing
-           used that direction, so the switch is disable-only now.) */
-        c = !opt_disabled("cs-evict") && prepushnarrow_on();
-    }
-    return c;
+    /* Follows prepush-narrow unless explicitly disabled. (The old
+       IR_CS_EVICT=1 could also force it ON against that default; nothing
+       used that direction, so the switch is disable-only now.) */
+    return !opt_disabled("cs-evict") && prepushnarrow_on();
 }
 
 /* Narrow the pre-pushed-call veto to calls that can lose BC.
@@ -1122,9 +1194,7 @@ static int cs_evict_on(void)
    operations measured in divbench and shiftbench. See adr/0063. */
 static int prepushnarrow_on(void)
 {
-    static int c = -1;
-    if (c < 0) c = !opt_disabled("prepush-narrow");
-    return c;
+    return !opt_disabled("prepush-narrow");
 }
 
 /* [mwbc] The corrected loop-depth weight plus the two cost-model repairs that
@@ -1134,9 +1204,7 @@ static int prepushnarrow_on(void)
    DEFAULT-ON; `IR_OFF=mwbc` opts out, byte-identical to pre-flip. */
 static int mwbc_on(void)
 {
-    static int c = -1;
-    if (c < 0) c = !opt_disabled("mwbc");
-    return c;
+    return !opt_disabled("mwbc");
 }
 /* [mwbc-pressure] The BC reservation that keeps a loop-carried accumulator
    available to the IY reduction pack. Independent of mwbc_on() — it is a pass
@@ -1144,9 +1212,7 @@ static int mwbc_on(void)
    the ranking has changed enough to take the value in the first place. */
 static int mwbc_pressure_on(void)
 {
-    static int c = -1;
-    if (c < 0) c = !opt_disabled("mwbc-pressure");
-    return c;
+    return !opt_disabled("mwbc-pressure");
 }
 
 
@@ -1355,14 +1421,7 @@ static int iv_home_hot_enough(const Func *f, int v, const int *use_count,
 
        `IR_IVACC=0` / `--opt-disable=iv-acc` opts out. `IR_IVHOT=<N>` re-sweeps
        the constant, `IR_IVACCK=<N>` the margin, `IR_IVWHY` prints the census. */
-    {
-        static int acc_on = -1;
-        if (acc_on < 0) {
-            /* opt_disabled("iv-acc") below is the switch; this was a duplicate. */
-            acc_on = 1;
-        }
-        if (!acc_on || opt_disabled("iv-acc")) return 0;
-    }
+    if (opt_disabled("iv-acc")) return 0;
     if (!bb_loop_depth) return 0;      /* no loop map: keep the old answer */
     return bc_call_save_charge(f, v, bb_loop_depth, bb_cond_shift) == 0;
 }
@@ -1471,14 +1530,15 @@ static int idx2_home_available(const Func *f)
        Two exclusions:
         - fp mode (idx2=IY, cheap (ix+d) slots): lose/lose — the push/pop access
           + the caller-IX save beat nothing. Keep the blunt call-free gate.
-        - cheap-sp-slot CPUs: ez80 (native `ld hl,(ix+d)`), rabbit and kc160 all
-          address sp locals cheaply, so the dear-slot premise doesn't hold and
-          the idx2 home doesn't pay (same class the g0 dear-slot cost gates use).
-          Only the z80 family (z80/z180/z80n) has the dear `add hl,sp` walk.
+        - cheap-sp-slot CPUs: rabbit and kc160 address sp locals cheaply, so
+          the dear-slot premise doesn't hold and the idx2 home doesn't pay.
+          ez80 does not: in sp mode it walks `ld hl,N; add hl,sp`, so it takes
+          the home (`--opt-disable=idx2-call-ez80` excludes it again).
        IX is callee-saved (Part A saves it via frame_has_saved_ix; the library is
        IX-safe); reject when the function uses IX itself (fnptr dispatch/far). */
     if (c_framepointer_is_ix != -1) return 0;          /* sp mode only */
-    if (IS_EZ80() || IS_RABBIT() || IS_KC160()) return 0;   /* cheap sp slots */
+    if ((IS_EZ80() && opt_disabled("idx2-call-ez80")) || IS_RABBIT() || IS_KC160())
+        return 0;                                      /* cheap sp slots */
     if (func_call_clobbers(f) & CLOB_IX) return 0;     /* sp idx2 = IX */
     if (func_idx2_self_use(f)) return 0;
     return 1;
@@ -1668,7 +1728,7 @@ static int collect_home_candidates(const Func *f,
                          RC_BYTE,
                          (vreg_single_bb(f, v) >= 0) ? CF_BYTE_SINGLE_BB : 0);
     /* (5) DE-class — three sub-shapes in pool order: acc, general, ptr. */
-    if (de_home_available(f)) {
+    if (de_home_available(f) && !de_class_veto) {
         if (c_word_resident && !opt_disabled("word-resident"))
             for (int v = 0; v < f->n_vregs; v++)
                 if (de_acc_realizable(f, v, use_count, write_count,
@@ -1817,9 +1877,7 @@ static long interval_benefit_x(const Func *f, int v, const int *bb_loop_depth,
    DEFAULT-ON at margin 2; `IR_OFF=bc-call-cost` opts out, `=<N>` sets the margin. */
 static int bccallcost_on(void)
 {
-    static int c = -1;
-    if (c < 0) c = !opt_disabled("bc-call-cost");
-    return c;
+    return !opt_disabled("bc-call-cost");
 }
 
 /* Eviction hysteresis, as the arbiter's counter-yield uses at 1.4x: decline the
@@ -1979,6 +2037,13 @@ static int g0_deref_offset_cost(int reg, int ofs)
 /* The offset a deref op carries, or 0 for anything that is not one. Only a
    MEM_VREG access based on `v` walks; a post-stepped one reaches its field
    through the step and is left at 0. */
+/* Width of the value a deref op moves. */
+static int deref_width(const Func *f, const Op *o)
+{
+    int x = (o->kind == IR_LD_MEM) ? o->dst : o->src[0];
+    return (x >= 0 && x < f->n_vregs) ? f->vregs[x].width : 1;
+}
+
 static int g0_deref_ofs_of(const Op *o, int v)
 {
     if (!o || (o->kind != IR_LD_MEM && o->kind != IR_ST_MEM)) return 0;
@@ -2157,14 +2222,27 @@ typedef struct {
     int v[IDX2_MAX_LIVE], lo[IDX2_MAX_LIVE], hi[IDX2_MAX_LIVE];
     int n;
     int overflow;
+    int param_hi;            /* end of the parameter occupant, or -1 */
 } Idx2Live;
 
-static int idx2_live_free(const Func *f, const Idx2Live *s, int v, int lo, int hi)
+/* A parameter is loaded into the home in the prologue, whatever window the
+   allocator proved for it. So it may only share the home as the first
+   occupant, and everything after it must start once it has ended: a later
+   occupant that starts earlier would be overwritten by the prologue load. */
+static int idx2_live_free_p(const Func *f, const Idx2Live *s, int v, int lo, int hi,
+                            int is_param)
 {
     if (s->overflow) return 0;
+    if (is_param && s->n > 0) return 0;
+    if (s->n > 0 && s->param_hi >= 0 && lo <= s->param_hi) return 0;
     for (int i = 0; i < s->n; i++)
         if (iv_overlap(f, v, s->v[i], lo, hi, s->lo[i], s->hi[i])) return 0;
     return 1;
+}
+
+static int idx2_live_free(const Func *f, const Idx2Live *s, int v, int lo, int hi)
+{
+    return idx2_live_free_p(f, s, v, lo, hi, 0);
 }
 
 /* A later pass (`tight-homes`) narrows a whole-function home down to the
@@ -2226,6 +2304,19 @@ static int counter_yields_bc_to_index(const Func *f, const Cand *pool, int n, in
         if (!ir_live_ranges_overlap(f, v, w)) continue;
         const LiveRange *lv = ir_live_range(f, v), *lw = ir_live_range(f, w);
         if (lv && lw && 2*(lw->end - lw->start) >= (lv->end - lv->start)) continue;
+        /* [yield-total] The swap must win in total: the base's BC gain plus
+           the counter's index gain against the counter's BC gain. */
+        if (!opt_disabled("yield-total")) {
+            long v_bc = 0, v_idx = 0;
+            for (int k = 0; k < n; k++) {
+                if (pool[k].vreg != v) continue;
+                if ((pool[k].allowed & RC_BC) && pool[k].benefit > v_bc)
+                    v_bc = pool[k].benefit;
+                if ((pool[k].allowed & (RC_IDX2 | RC_IDX3)) && pool[k].benefit > v_idx)
+                    v_idx = pool[k].benefit;
+            }
+            if (pool[j].benefit + v_idx <= v_bc) continue;
+        }
         return 1;   /* a deref-base wants BC + the index is cheap → counter → index */
     }
     return 0;
@@ -2261,6 +2352,7 @@ static void unified_arbitrate(Func *f, Cand *pool, int n, const long *idx_ben,
     int idx3_taken = 0;                  /* the second index (IY) home */
     int idx2_reuse_on = !opt_disabled("idx2-reuse");
     Idx2Live idx2_live = {0};
+    idx2_live.param_hi = -1;
     int exx_taken = 0;                   /* alt-bank invariant claimed → IX freed */
     int de_acc_vreg = -1;                /* DE-acc winner, APPLIED after the loop */
     int de_acc_general = 0;              /* winner is a general (non-acc) home */
@@ -2308,7 +2400,8 @@ static void unified_arbitrate(Func *f, Cand *pool, int n, const long *idx_ben,
                idx2 for a param if no counter candidate is still assignable
                over an OVERLAPPING window — a non-overlapping param and
                counter can both live here. */
-            if (!idx2_live_free(f, &idx2_live, v, c->lo, c->hi)) continue;
+            if (!idx2_live_free_p(f, &idx2_live, v, c->lo, c->hi,
+                                  (c->flags & CF_IDX2_PARAM) != 0)) continue;
             if (f->idx2_reg == IR_PR_NONE) continue;
             /* G1 grounded gate: skip an index home that costs more than the slot
                for this value (read-only value on a cheap-slot target). G2: unless
@@ -2350,6 +2443,7 @@ static void unified_arbitrate(Func *f, Cand *pool, int n, const long *idx_ben,
             }
             f->vreg_to_phys[v] = f->idx2_reg;
             idx2_live_add(f, &idx2_live, v, c->lo, c->hi, idx2_reuse_on);
+            if (c->flags & CF_IDX2_PARAM) idx2_live.param_hi = c->hi;
             continue;
         }
 
@@ -2532,11 +2626,12 @@ static void unified_arbitrate(Func *f, Cand *pool, int n, const long *idx_ben,
     if (idx2_defer >= 0 && f->idx2_reg != IR_PR_NONE
         && !opt_disabled("idx2-revisit")
         && f->vreg_to_phys[pool[idx2_defer].vreg] == IR_PR_SPILL
-        && idx2_live_free(f, &idx2_live, pool[idx2_defer].vreg,
-                          pool[idx2_defer].lo, pool[idx2_defer].hi)) {
+        && idx2_live_free_p(f, &idx2_live, pool[idx2_defer].vreg,
+                            pool[idx2_defer].lo, pool[idx2_defer].hi, 1)) {
         f->vreg_to_phys[pool[idx2_defer].vreg] = f->idx2_reg;
         idx2_live_add(f, &idx2_live, pool[idx2_defer].vreg,
                       pool[idx2_defer].lo, pool[idx2_defer].hi, idx2_reuse_on);
+        idx2_live.param_hi = pool[idx2_defer].hi;
     }
     /* ---- PAIRWISE SWAP: BC <-> the index home ----------------------------
        The loop above is ISOLATION-PRICED GREEDY: it gives each candidate its
@@ -2589,6 +2684,7 @@ static void unified_arbitrate(Func *f, Cand *pool, int n, const long *idx_ben,
        prepick snapshot is the full baseline (matches the sequential picker). */
     if (de_acc_vreg >= 0 && f->vreg_to_phys[de_acc_vreg] == IR_PR_SPILL) {
         free(word_home_prepick);
+        free(late_pair_home); late_pair_home = NULL;
         word_home_prepick = malloc((size_t)f->n_vregs * sizeof(int));
         if (word_home_prepick)
             memcpy(word_home_prepick, f->vreg_to_phys,
@@ -2645,6 +2741,7 @@ static void unified_arbitrate(Func *f, Cand *pool, int n, const long *idx_ben,
         if (gbest >= 0 && !e_taken) {
             int v = pool[gbest].vreg;
             free(word_home_prepick);
+            free(late_pair_home); late_pair_home = NULL;
             word_home_prepick = malloc((size_t)f->n_vregs * sizeof(int));
             if (word_home_prepick)
                 memcpy(word_home_prepick, f->vreg_to_phys,
@@ -2691,6 +2788,20 @@ static int bc_pack_span_kind_ok(OpKind k)
     default:
         return 0;
     }
+}
+
+/* [callbc] bc_pack_span_kind_ok bars IR_SHR for the B shift counter. The
+   arithmetic count>=15 shift (gen_sar16's sign fill, `add a,a; sbc a,a;
+   ld h,a; ld l,a`) uses no BC on any CPU, so that one op is allowed. Gated
+   with callbc, the case it exists for. */
+static int bc_pack_span_op_ok(const Func *f, const Op *o)
+{
+    if (bc_pack_span_kind_ok(o->kind)) return 1;
+    if (!opt_disabled("callbc") && o->kind == IR_SHR && (o->imm & IR_SHR_ARITH)
+        && ((int)o->imm & 0x1f) >= 15
+        && o->dst >= 0 && f->vregs[o->dst].width == 2)
+        return 1;
+    return 0;
 }
 
 /* True if op o references (dst or any use) a width-4 (DEHL) vreg — that
@@ -2973,7 +3084,7 @@ static void ir_iy_reduction_pack(Func *f, const int *bb_in_loop,
         for (int v = 0; v < f->n_vregs; v++) {
             PhysReg p = f->vreg_to_phys[v];
             if (p == IR_PR_IY || p == IR_PR_IYL || p == IR_PR_IYH)
-                f->vreg_to_phys[v] = IR_PR_SPILL;   /* revert-to-slot */
+                alloc_note_late_home(f, v, IR_PR_SPILL);   /* revert-to-slot */
         }
         if (getenv("IR_ALLOC_PROBE"))
             fprintf(stderr, "IY_EVICT %d idx2 occupant(s) (fp wash) for candidate score=%ld\n",
@@ -2982,13 +3093,14 @@ static void ir_iy_reduction_pack(Func *f, const int *bb_in_loop,
     (void)occ_score;
 
     if (pick.win_acc) {
-        f->vreg_to_phys[pick.acc] = IR_PR_IY;
+        alloc_note_late_home(f, pick.acc, IR_PR_IY);
         f->idx3_reg = IR_PR_IY;
         if (getenv("IR_ALLOC_PROBE"))
             fprintf(stderr, "IY_ACC v%d bb%d score=%ld (loop-carried accumulator)\n",
                     pick.acc, pick.acc_bb, pick.acc_score);
     } else {
-        for (int m = 0; m < pick.nm; m++) f->vreg_to_phys[pick.members[m]] = IR_PR_IY;
+        for (int m = 0; m < pick.nm; m++)
+            alloc_note_late_home(f, pick.members[m], IR_PR_IY);
         f->idx3_reg = IR_PR_IY;
     }
 }
@@ -3089,8 +3201,13 @@ static SpillShape *compute_spill_shapes(const Func *f)
    ir_bc_pack and ir_stack_spill pack: width-2, currently SPILL, not
    param/addr-taken/volatile, and exactly one def by a register-stampable
    producer (bc_safe_producer). Each pass adds its own shape/span/use gates. */
+/* `allow_call_producer`: ir_bc_pack passes 1 (its PR_BC stamp handles a call
+   result). ir_stack_spill passes 0: a call result's PR_STACK commit goes
+   through store_hl_keep_hl + cache_hl, which leaves the HL belief over the
+   TOS park, so a reader could skip the balancing pop. */
 static int spill_word_producer_ok(const Func *f, int v,
-                                  const int *write_count, const int *def_kind)
+                                  const int *write_count, const int *def_kind,
+                                  int allow_call_producer)
 {
     const VReg *vr = &f->vregs[v];
     if (vr->width != 2) return 0;
@@ -3098,7 +3215,9 @@ static int spill_word_producer_ok(const Func *f, int v,
     if (vr->flags & (IR_VREG_PARAM | IR_VREG_ADDR_TAKEN | IR_VREG_VOLATILE))
         return 0;
     if (write_count[v] != 1) return 0;
-    if (!bc_safe_producer(def_kind[v])) return 0;
+    if (!(allow_call_producer ? bc_safe_producer_singledef(def_kind[v])
+                               : bc_safe_producer(def_kind[v])))
+        return 0;
     return 1;
 }
 
@@ -3149,7 +3268,7 @@ static int collect_bc_temp_cands(const Func *f, const int *bb_first_op,
         for (int j = sh[v].lo + 1; j <= sh[v].hi && span_ok; j++) {
             const Op *o = &bb->ops[j];
             if (o->kind == IR_CALL || o->kind == IR_HCALL || o->kind == IR_ASM
-                || !bc_pack_span_kind_ok(o->kind)
+                || !bc_pack_span_op_ok(f, o)
                 || bc_pack_op_touches_w4(f, o))
                 span_ok = 0;
         }
@@ -3165,8 +3284,12 @@ static int collect_bc_temp_cands(const Func *f, const int *bb_first_op,
     int nc = 0;
     for (int v = 0; v < f->n_vregs; v++) {
         if (!itloc[v]) continue;
-        if (!spill_word_producer_ok(f, v, write_count, def_kind)) continue;
+        if (!spill_word_producer_ok(f, v, write_count, def_kind, 1)) continue;
         if (use_count[v] < 1) continue;
+        /* [callbc] A call result pays an `ld bc,hl` to reach BC, so it needs
+           two or more reads. op_dst_spill_is_dead only sees a dead single use
+           at the very next op and misses one with an operand load between. */
+        if (def_kind[v] == IR_CALL && use_count[v] < 2) continue;
         /* Only pack when the SPILL alternative actually costs frame traffic: if
            the def's spill store is dead (value HL-carried to a single adjacent
            use), a register home saves nothing and the stamp is pure overhead.
@@ -3295,6 +3418,85 @@ static int prepush_bc_hazard(const Func *f)
     return 0;
 }
 
+/* (c) of the above, per value rather than per function: mark[v] = 1 for a value
+   WRITTEN inside an open group and read after the call that closes it, or read
+   before that write (a loop-carried value). Same emitter walk as
+   prepush_bc_hazard. */
+static void prepush_straddle_mark(const Func *f, char *mark)
+{
+    int nv = f->n_vregs;
+    int *def_at = malloc((size_t)nv * sizeof(int));
+    int *close_at = malloc((size_t)nv * sizeof(int));
+    int *open = malloc((size_t)nv * sizeof(int));
+    if (!def_at || !close_at || !open) {
+        for (int v = 0; v < nv; v++) mark[v] = 1;
+        free(def_at); free(close_at); free(open);
+        return;
+    }
+    for (int v = 0; v < nv; v++) { def_at[v] = -1; close_at[v] = -1; }
+    int depth = 0, g = 0, n_open = 0;
+    for (int i = 0; i < f->n_bbs; i++)
+        for (int j = 0; j < f->bbs[i].n_ops; j++, g++) {
+            const Op *o = &f->bbs[i].ops[j];
+            if (o->kind == IR_PUSH_ARG && o->imm == 1) {
+                if (depth < BC_ARGS_SAVE_MAX_PROBE) depth++;
+            } else if (o->kind == IR_CALL && o->call
+                       && o->call->pre_pushed > 0) {
+                if (depth > 0) depth--;
+                for (int k = 0; k < n_open; k++)
+                    if (close_at[open[k]] < 0) close_at[open[k]] = g;
+                if (depth == 0) n_open = 0;
+                continue;
+            }
+            if (depth > 0) {
+                int d[8]; int nd = ir_op_defs(o, d, 8);
+                for (int k = 0; k < nd; k++)
+                    if (d[k] >= 0 && d[k] < nv && def_at[d[k]] < 0) {
+                        def_at[d[k]] = g;
+                        if (n_open < nv) open[n_open++] = d[k];
+                    }
+            }
+        }
+    g = 0;
+    for (int i = 0; i < f->n_bbs; i++)
+        for (int j = 0; j < f->bbs[i].n_ops; j++, g++) {
+            const Op *o = &f->bbs[i].ops[j];
+            int nu = ir_op_uses_count(o);
+            int ub[16]; int *u = nu > 16 ? malloc((size_t)nu * sizeof(int)) : ub;
+            if (!u) { for (int v = 0; v < nv; v++) mark[v] = 1; break; }
+            nu = ir_op_uses(o, u, nu > 16 ? nu : 16);
+            for (int k = 0; k < nu; k++) {
+                int v = u[k];
+                if (v < 0 || v >= nv || def_at[v] < 0) continue;
+                if (g < def_at[v] || (close_at[v] >= 0 && g > close_at[v]))
+                    mark[v] = 1;
+            }
+            if (u != ub) free(u);
+        }
+    free(def_at); free(close_at); free(open);
+}
+
+/* [prepush-straddle] Take BC, B and C away from the values prepush_straddle_mark
+   finds. The save at a group's first push holds BC from BEFORE their write, and
+   the pop after the call puts it back over them: `say("x", ++n); return n;`
+   returned the old n. */
+static void prepush_straddle_demote(Func *f)
+{
+    if (opt_disabled("prepush-straddle") || !f->vreg_to_phys || f->n_vregs <= 0)
+        return;
+    char *mark = calloc((size_t)f->n_vregs, 1);
+    if (!mark) return;
+    prepush_straddle_mark(f, mark);
+    for (int v = 0; v < f->n_vregs; v++) {
+        if (!mark[v]) continue;
+        int ph = f->vreg_to_phys[v];
+        if (ph != IR_PR_BC && ph != IR_PR_B && ph != IR_PR_C) continue;
+        ir_alloc_demote_home(f, v);
+        f->vregs[v].flags &= ~(IR_VREG_BC_PACK | IR_VREG_CALL_SPLIT);
+    }
+    free(mark);
+}
+
 
 /* [IR_OFF=bc-per-cand] Default-on after the matrix: switchbench -1.96%..-5.63% and
    widthbench -0.14%..-1.43% on all six valid-tick CPUs, every other suite within
@@ -3302,9 +3504,7 @@ static int prepush_bc_hazard(const Func *f)
    sp/fp; adv_a -4/-6, clisp -59/-8, enigma unchanged. Opt out to revert. */
 static int bcpercand_on(void)
 {
-    static int on = -1;
-    if (on < 0) on = !opt_disabled("bc-per-cand");
-    return on;
+    return !opt_disabled("bc-per-cand");
 }
 
 static void ir_bc_pack(Func *f, const int *first_use, const int *last_use,
@@ -3395,6 +3595,10 @@ static void ir_bc_pack(Func *f, const int *first_use, const int *last_use,
                 int last = -1;
                 for (int i = 0; i < nc; i++) {
                     if (cand[i].flo <= last) continue;
+                    /* [callbc] A call result may take a free BC slot but never
+                       evicts a tenant: the eviction can cost a dependent temp its
+                       home (ir_iy_temp_pack), which cost_benefit cannot see. */
+                    if (def_kind[cand[i].vreg] == IR_CALL) continue;
                     int clash = 0;
                     ir_liveprobe_decision_begin_site(2);
                     for (int j = 0; j < f->n_vregs && !clash; j++) {
@@ -3428,6 +3632,8 @@ static void ir_bc_pack(Func *f, const int *first_use, const int *last_use,
        loop-home tenant (not itloc) blocks over its EXTENDED interval; an itloc
        tenant only over its TIGHT span (it releases BC when dead). */
     int packed = 0, last_fhi = -1; int rej_sib = 0, rej_ten = 0;
+    char *is_packed = calloc((size_t)(nc > 0 ? nc : 1), 1);
+    char *ten_only  = calloc((size_t)(nc > 0 ? nc : 1), 1);
     for (int i = 0; i < nc; i++) {
         int v = cand[i].vreg;
         if (cand[i].flo <= last_fhi) { rej_sib++; continue; }   /* packed sibling */
@@ -3444,13 +3650,61 @@ static void ir_bc_pack(Func *f, const int *first_use, const int *last_use,
         ir_liveprobe_decision_end();
         if (clash) {
             rej_ten++;
-continue;
+            if (ten_only) ten_only[i] = 1;
+            continue;
         }
         f->vreg_to_phys[v] = IR_PR_BC;
         f->vregs[v].flags |= IR_VREG_BC_PACK;
         last_fhi = cand[i].fhi;
+        if (is_packed) is_packed[i] = 1;
         packed++;
     }
+    /* Hand-off: a candidate blocked only by a tenant that dies at its def op
+       (`i2 = i << 1`) may share BC across that op. It displaces packed
+       candidates only if worth more: reads, or 0 for a remat constant. */
+    if (is_packed && ten_only && !opt_disabled("bc-handoff")) {
+        #define BCH_WORTH(v) ((def_kind[v] == IR_LD_IMM || def_kind[v] == IR_LD_SYM \
+                               || def_kind[v] == IR_LD_STR || def_kind[v] == IR_LEA) \
+                              ? 0 : use_count[v])
+        for (int i = 0; i < nc; i++) {
+            if (!ten_only[i]) continue;
+            int v = cand[i].vreg;
+            int blocked = 0;
+            for (int j = 0; j < f->n_vregs && !blocked; j++) {
+                if (f->vreg_to_phys[j] != IR_PR_BC) continue;
+                if (f->vregs[j].flags & IR_VREG_BC_PACK) continue;
+                int jlo, jhi;
+                bc_tenant_interval(j, itloc, itlo, ithi, first_use, last_use, &jlo, &jhi);
+                if (!iv_overlap(f, v, j, cand[i].flo, cand[i].fhi, jlo, jhi)) continue;
+                if (!(jhi == cand[i].flo && jlo < jhi && last_use[j] == jhi
+                      && !itloc[j]))
+                    blocked = 1;
+            }
+            if (blocked) continue;
+            long displaced = 0; int nd = 0;
+            for (int k = 0; k < nc; k++) {
+                if (!is_packed[k]) continue;
+                if (cand[k].flo <= cand[i].fhi && cand[i].flo <= cand[k].fhi) {
+                    displaced += BCH_WORTH(cand[k].vreg); nd++;
+                }
+            }
+            if (BCH_WORTH(v) <= displaced) continue;
+            for (int k = 0; k < nc; k++) {
+                if (!is_packed[k]) continue;
+                if (cand[k].flo <= cand[i].fhi && cand[i].flo <= cand[k].fhi) {
+                    int u = cand[k].vreg;
+                    f->vreg_to_phys[u] = IR_PR_SPILL;
+                    f->vregs[u].flags &= ~IR_VREG_BC_PACK;
+                    is_packed[k] = 0; packed--;
+                }
+            }
+            f->vreg_to_phys[v] = IR_PR_BC;
+            f->vregs[v].flags |= IR_VREG_BC_PACK;
+            is_packed[i] = 1; packed++;
+        }
+        #undef BCH_WORTH
+    }
+    free(is_packed); free(ten_only);
     if (getenv("IR_ALLOC_PROBE"))
         fprintf(stderr, "BC_PACK packed=%d of candidates=%d rejsib=%d rejten=%d\n",
                 packed, nc, rej_sib, rej_ten);
@@ -3513,6 +3767,45 @@ static int stack_spill_span_hazard(OpKind k)
     }
 }
 
+/* [IR_CALLBC_PROBE] Inert probe, no codegen effect. Counts local, multi-read,
+   hazard-free word vregs left IR_PR_SPILL after every placement pass: call
+   results only by default, any producer with IR_CALLBC_PROBE=2. Uses the
+   compute_spill_shapes shape and stack_spill_span_hazard's exclusions. */
+static void probe_call_result_bc(Func *f, const int *def_kind,
+                                 const int *write_count)
+{
+    const char *mode = getenv("IR_CALLBC_PROBE");
+    if (!mode) return;
+    int general = mode[0] == '2';
+    if (f->n_vregs <= 0) return;
+    SpillShape *sh = compute_spill_shapes(f);
+    if (!sh) return;
+    int cands = 0, total_extra_reads = 0;
+    for (int v = 0; v < f->n_vregs; v++) {
+        if (f->vregs[v].width != 2) continue;
+        if (f->vregs[v].flags & (IR_VREG_PARAM | IR_VREG_ADDR_TAKEN | IR_VREG_VOLATILE))
+            continue;
+        if (write_count[v] != 1) continue;
+        if (!general && def_kind[v] != IR_CALL && def_kind[v] != IR_HCALL) continue;
+        if (general && f->vreg_to_phys[v] != IR_PR_SPILL) continue;
+        if (!sh[v].local || sh[v].uses < 2) continue;
+        const BB *bb = &f->bbs[sh[v].bb_of];
+        int lo = sh[v].lo, hi = sh[v].hi;
+        int hazard = 0;
+        for (int j = lo + 1; j <= hi && !hazard; j++)
+            if (stack_spill_span_hazard(bb->ops[j].kind)) hazard = 1;
+        if (hazard) continue;
+        cands++;
+        total_extra_reads += sh[v].uses - 1;   /* push/pop round trips saved */
+        fprintf(stderr, "CALLBC_PROBE %s v%d uses=%d kind=%d\n",
+                f->fn ? ir_sym_name(f->fn) : "?", v, sh[v].uses, def_kind[v]);
+    }
+    free(sh);
+    if (cands)
+        fprintf(stderr, "CALLBC_PROBE_TOTAL %s cands=%d extra_round_trips=%d\n",
+                f->fn ? ir_sym_name(f->fn) : "?", cands, total_extra_reads);
+}
+
 /* Stack-transient spill (default on, IR_NO_STACK_SPILL opts out). A leftover spilled width-2
    temp (after all register allocation incl. ir_bc_pack) with a SINGLE def and
    SINGLE use in one straight-line span goes on the STACK — `push hl` at the
@@ -3531,6 +3824,7 @@ static int stack_spill_span_hazard(OpKind k)
      - NO stack/control hazard between def and use (stack_spill_span_hazard);
      - DISJOINT from every other stack-transient (greedy) — at most one parked
        at a time, so a single TOS slot and LIFO are trivially safe. */
+static int is_cmp_op(int k);
 static void ir_stack_spill(Func *f, const int *bb_first_op, const int *def_kind,
                            const int *write_count)
 {
@@ -3557,7 +3851,12 @@ static void ir_stack_spill(Func *f, const int *bb_first_op, const int *def_kind,
     int nc = 0;
 
     for (int v = 0; v < f->n_vregs; v++) {
-        if (!spill_word_producer_ok(f, v, write_count, def_kind)) continue;
+        if (!spill_word_producer_ok(f, v, write_count, def_kind, 0)) continue;
+        /* A constant or address is rebuilt at its use; parking it would also
+           leave the park unpopped where the consumer folds it as an immediate. */
+        if (def_kind[v] == IR_LD_IMM || def_kind[v] == IR_LD_SYM
+            || def_kind[v] == IR_LEA || def_kind[v] == IR_LD_STR)
+            continue;
 
         /* Shared shape: single-BB, first-ref-is-def, not live across the BB, tight
            [lo,hi]; plus stack_spill's own "exactly one use". */
@@ -3575,6 +3874,41 @@ static void ir_stack_spill(Func *f, const int *bb_first_op, const int *def_kind,
         if (hi == lo + 1) {
             OpKind uk = bb->ops[hi].kind;
             if (uk == IR_ADD || uk == IR_AND || uk == IR_OR || uk == IR_XOR)
+                continue;
+        }
+        /* The same with a byte truncation between (`*p = (char)i`): the byte
+           is read from its register through A, leaving HL alone. */
+        if (hi == lo + 2 && !opt_disabled("stack-spill-base")) {
+            const Op *mid = &bb->ops[lo + 1], *uo = &bb->ops[hi];
+            if (mid->kind == IR_CONV_TRUNC && mid->dst >= 0
+                && f->vregs[mid->dst].width == 1
+                && mid->src[0] >= 0 && mid->src[0] != v
+                && (uo->kind == IR_ST_MEM || uo->kind == IR_LD_MEM)
+                && uo->mem.kind == IR_MEM_VREG && uo->mem.base == v
+                && uo->src[0] == mid->dst)
+                continue;
+        }
+        /* The same with one global word load between: `a += g` loads g with
+           `ld de,(g)`, which leaves HL (where v rides) alone. */
+        if (hi == lo + 2 && !IS_808x() && !IS_GBZ80()
+            && !opt_disabled("word-mem-rhs")) {
+            const Op *mid = &bb->ops[lo + 1], *uo = &bb->ops[hi];
+            if ((uo->kind == IR_ADD || (uo->kind == IR_SUB && uo->src[0] == v))
+                && mid->kind == IR_LD_MEM && mid->mem.kind == IR_MEM_SYM
+                && !mid->mem.volatile_ && mid->dst >= 0
+                && f->vregs[mid->dst].width == 2
+                && ((uo->src[0] == v && uo->src[1] == mid->dst)
+                    || (uo->src[1] == v && uo->src[0] == mid->dst)))
+                continue;
+        }
+
+        /* A byte-wide use reads one byte of the parked word, and the byte ALU
+           operand paths have no pop for it: they would read a frame slot the
+           value never had and leave the park on the stack. */
+        {
+            const Op *uo = &bb->ops[hi];
+            if (!is_cmp_op(uo->kind) && uo->dst >= 0 && uo->dst < f->n_vregs
+                && f->vregs[uo->dst].width == 1)
                 continue;
         }
 
@@ -3645,9 +3979,7 @@ static void ir_stack_spill(Func *f, const int *bb_first_op, const int *def_kind,
    Z80 row. Default ON: the row is now micro-benchmarked (z80_cost_bench.py). */
 static int g0measured_on(void)
 {
-    static int on = -1;
-    if (on < 0) on = !opt_disabled("g0-measured");
-    return on;
+    return !opt_disabled("g0-measured");
 }
 
 static int g0_word_cost(int reg, int kind)
@@ -3979,7 +4311,7 @@ static void ir_iy_temp_pack(Func *f, const int *bb_first_op,
         for (int k = lo + 1; k <= hi && clean; k++)
             if (op_clobbers(f, &bb->ops[k]) & IR_R_IY) clean = 0;
         if (!clean) continue;
-        f->vreg_to_phys[v] = IR_PR_IY;
+        alloc_note_late_home(f, v, IR_PR_IY);
         f->idx3_reg = IR_PR_IY;
         last_fhi = cand[i].fhi;
         packed++;
@@ -4145,7 +4477,15 @@ static long interval_benefit_x(const Func *f, int v, const int *bb_loop_depth,
             int u[16]; int nu=ir_op_uses(o,u,16);
             int dofs = g0_deref_ofs_of(o, v);
             for (int k=0;k<nu;k++) if (u[k]==v) {
-                if (v==mb)
+                if (v==mb && !is_index && deref_width(f, o) >= 2
+                    && !opt_disabled("deref-width"))
+                    /* [deref-width] a word through a pair goes via HL either
+                       way: only the base read differs */
+                    ben += w*((g0_word_cost(GR_SLOT,GK_READ)
+                               + g0_deref_offset_cost(GR_SLOT,dofs))
+                              - (g0_word_cost(R,GK_READ)
+                                 + g0_deref_offset_cost(R,dofs)));
+                else if (v==mb)
                     ben += w*((g0_word_cost(GR_SLOT,GK_DEREF)
                                + g0_deref_offset_cost(GR_SLOT,dofs))
                               - (g0_word_cost(R,GK_DEREF)
@@ -4536,9 +4876,7 @@ static void bytepack_verify(const Func *f)
    with B/C homes until the lowerer has separate residency latches. */
 static int bytepack_on(void)
 {
-    static int on = -1;
-    if (on < 0) on = !opt_disabled("byte-pack");
-    return on;
+    return !opt_disabled("byte-pack");
 }
 
 static void bytepack_pack(Func *f)
@@ -5768,6 +6106,7 @@ void ir_alloc(Func *f)
                        && !IS_808x() && !IS_GBZ80();
         if (bc_region_ok || !fp_ix_frame)
         ir_stack_spill(f, bb_first_op, def_kind, write_count);
+        probe_call_result_bc(f, def_kind, write_count);
         /* [IR_GRAPH_PROBE] inert divergence + pressure report. Placed here, after
            EVERY placement pass (arbiter, bc_pack, both IY packs, stack_spill), so
            vreg_to_phys is the final answer and the model is scored against what
@@ -6353,6 +6692,7 @@ void ir_alloc(Func *f)
     assign_idxhalf_homes(f);
     bytepack_verify(f);   /* size the spill candidates before placement */
     bytepack_pack(f);
+    prepush_straddle_demote(f);
     hr_recoverability_verify(f);
     ir_liveprobe_flush(f->fn ? ir_sym_name(f->fn) : "?");
 }

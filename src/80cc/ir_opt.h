@@ -70,6 +70,7 @@ int ir_opt_st2ld(Func *f);
  * Returns the number of ops rewritten to IR_MOV.
  */
 int ir_opt_cse(Func *f);
+extern int ir_cse_alias_fired, ir_cse_alias_veto;
 
 /* Spatial address CSE (clustered array access, e.g. a stencil's a[k], a[k-1],
  * a[k+1]). Within a BB, memory accesses whose byte address is the same
@@ -173,6 +174,7 @@ int ir_opt_prune_unreachable(Func *f);
  * ir_lower emits the 8-bit-in-A form. IR_NO_NARROW_BYTE opts out.
  * Returns the number of ops narrowed. */
 int ir_opt_narrow_byte(Func *f);
+int ir_opt_byte_cleanup(Func *f);
 
 /* [IR_CMPSIGN_PROBE] Inert: classify each signed compare by which
    non-negativity proof would let its 7-byte sign correction be dropped. */
@@ -187,6 +189,8 @@ int ir_opt_cmp_unsign(Func *f);
  * byte inc/dec step, 1-byte slot, int uses auto-widen. IR_NO_IV_NARROW opts
  * out. Returns the number of counters narrowed. */
 int ir_opt_narrow_iv(Func *f);
+int ir_opt_step_cmp(Func *f);
+int ir_opt_const_local(Func *f);
 
 /* Local (per-BB) copy propagation: rewrites src operands reading an
  * identity copy (MOV / same-width CONV_SX|ZX) to read the copy's source,
@@ -194,6 +198,8 @@ int ir_opt_narrow_iv(Func *f);
  * narrow_byte, whose narrowed CONV operands are byte-identity copies that
  * would otherwise spill to a slot. Returns operands rewritten. */
 int ir_opt_copy_prop(Func *f);
+int ir_opt_sink_trunc(Func *f);
+int ir_opt_self_ops(Func *f);
 
 /* Coalesce a single-use width-1 copy `d <- t` by folding t into d (renaming
  * every def of t to d, dropping the now-identity copy), so a char-ternary

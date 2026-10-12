@@ -787,7 +787,7 @@ static void symoff_apply(Func *f, BB *bb, const int idx[],
                   ADD survives with t1 swapped for i (template keep
                   bit). */
 
-enum { ZV_T = 1, ZV_P, ZV_T2, ZV_I };   /* vregoff binding vars */
+enum { ZV_T = 1, ZV_P, ZV_T2, ZV_I, ZV_S };   /* vregoff binding vars */
 
 static int vregoff_mem_ok(const Func *f, const Op *m, int base,
                           const int uc[], int width_of)
@@ -883,6 +883,40 @@ static void vregoff_idx_apply(Func *f, BB *bb, const int idx[],
     a2->src[slot]  = bind[ZV_I];
     m3->mem.offset = (int)((int64_t)m3->mem.offset
                            + vregoff_k(ad, imm[0]));
+}
+
+/* vregoff_symidx  LD_SYM s <- sym+K1; ADD t <- s,x (either order);
+                   MEM [t, K2]  →  LD_SYM s <- sym+K1+K2; ADD t <- s,x;
+                   MEM [t, 0]. The field offset of `sym[i].f` rides in the
+                   symbol operand, so the address costs one `ld de,_sym+K`
+                   instead of that plus a second constant add. */
+static int vregoff_symidx_check(Func *f, BB *bb, const int idx[],
+                                const int64_t imm[], const int bind[],
+                                const int uc[])
+{
+    (void)imm;
+    const Op *ld = &bb->ops[idx[0]];
+    const Op *ad = &bb->ops[idx[1]];
+    const Op *ms = &bb->ops[idx[2]];
+    int s = bind[ZV_S], t = bind[ZV_T];
+    if (ld->mem.kind != IR_MEM_SYM || !ld->mem.sym) return 0;
+    if (uc[s] != 1 || f->vregs[s].width != 2) return 0;
+    if (ad->src[0] < 0 || ad->src[1] < 0 || ad->imm_sym) return 0;
+    if ((ad->src[0] == s) == (ad->src[1] == s)) return 0;
+    if (!vregoff_mem_ok(f, ms, t, uc, t)) return 0;
+    if (ms->mem.offset == 0) return 0;
+    int64_t no = (int64_t)ld->mem.offset + ms->mem.offset;
+    return no >= INT32_MIN && no <= INT32_MAX;
+}
+
+static void vregoff_symidx_apply(Func *f, BB *bb, const int idx[],
+                                 const int64_t imm[], const int bind[])
+{
+    (void)f; (void)imm; (void)bind;
+    Op *ld = &bb->ops[idx[0]];
+    Op *ms = &bb->ops[idx[2]];
+    ld->mem.offset = (int)((int64_t)ld->mem.offset + ms->mem.offset);
+    ms->mem.offset = 0;
 }
 
 static const PatternDef ir_patterns[] = {
@@ -1006,6 +1040,18 @@ static const PatternDef ir_patterns_vregoff[] = {
             .dst = IR_MS_ANY, .src0 = IR_MS_ANY, .src1 = IR_MS_ANY },
       },
       .check = vregoff_idx_check, .apply = vregoff_idx_apply },
+
+    { .name = "vregoff_symidx", .n_ops = 3,
+      .flags = IR_PAT_NO_AUTO_TEMPS | IR_PAT_COMMUTATIVE | IR_PAT_GAP_OK,
+      .ops = {
+          { .kind = IR_LD_SYM, .dst = ZV_S, .keep = 1 },
+          { .kind = IR_ADD, .dst = ZV_T, .src0 = ZV_S,
+            .src1 = IR_MS_ANY, .keep = 1 },
+          { .kind = IR_LD_MEM, .kind_alt = 1 + IR_ST_MEM,
+            .dst = IR_MS_ANY, .src0 = IR_MS_ANY, .src1 = IR_MS_ANY,
+            .keep = 1 },
+      },
+      .check = vregoff_symidx_check, .apply = vregoff_symidx_apply },
 };
 
 /* incmhl — discarded-result long ++/-- in memory:
@@ -1693,6 +1739,50 @@ static int pack_match_lane(Func *f, BB *bb, const int *def_idx,
     return 0;
 }
 
+/* Two address operands holding the same value at op positions lo..hi: the
+   same vreg with no write between, or two loads of one link-time symbol
+   (LICM hoists each use of a global's address as its own vreg). */
+static int pack_same_operand(Func *f, BB *bb, const int *def_idx, int lo,
+                             int hi, int x, int y)
+{
+    x = pack_canon(f, bb, def_idx, x);   /* CSE leaves duplicates as MOVs */
+    y = pack_canon(f, bb, def_idx, y);
+    if (x == y) {
+        for (int k = lo + 1; k < hi; k++)
+            if (bb->ops[k].dst == x) return 0;
+        return 1;
+    }
+    const Op *dx = ir_sole_def(f, x), *dy = ir_sole_def(f, y);
+    return dx && dy && dx->kind == IR_LD_SYM && dy->kind == IR_LD_SYM
+        && dx->mem.sym && dx->mem.sym == dy->mem.sym
+        && dx->mem.offset == dy->mem.offset
+        && !dx->mem.bank_fn && !dy->mem.bank_fn
+        && f->vregs[x].width == f->vregs[y].width;
+}
+
+/* Lane bases a and b (canonical vregs) address the same byte: the same vreg,
+   or two register-register ADDs in this BB over equal operands. This is what
+   `a[2*i]` | `a[2*i+1]` leaves once the +1 has been folded into the load's
+   offset: the second address is a duplicate of the first that CSE could not
+   see through the separately hoisted symbol loads. */
+static int pack_same_base(Func *f, BB *bb, const int *def_idx,
+                          int a, int b)
+{
+    if (a == b) return 1;
+    if (a < 0 || b < 0 || a >= f->n_vregs || b >= f->n_vregs) return 0;
+    int ia = def_idx[a], ib = def_idx[b];
+    if (ia < 0 || ib < 0) return 0;
+    const Op *oa = &bb->ops[ia], *ob = &bb->ops[ib];
+    if (oa->kind != IR_ADD || ob->kind != IR_ADD) return 0;
+    if (oa->src[1] < 0 || ob->src[1] < 0) return 0;
+    if (f->vregs[a].width != f->vregs[b].width) return 0;
+    int lo = ia < ib ? ia : ib, hi = ia < ib ? ib : ia;
+    return (pack_same_operand(f, bb, def_idx, lo, hi, oa->src[0], ob->src[0])
+            && pack_same_operand(f, bb, def_idx, lo, hi, oa->src[1], ob->src[1]))
+        || (pack_same_operand(f, bb, def_idx, lo, hi, oa->src[0], ob->src[1])
+            && pack_same_operand(f, bb, def_idx, lo, hi, oa->src[1], ob->src[0]));
+}
+
 /* Walk the OR tree at root_idx, validate the 4-lane little-endian
    pack, and return the rewrite + kill set. def_idx is built by the
    caller. Returns 0 ok (out_* and lanes/or_idx filled), -1 no match. */
@@ -1744,7 +1834,7 @@ static int pack_analyze(Func *f, BB *bb, const int *def_idx,
     int seen = 0, base = lanes[0].base;
     int le_off = INT32_MAX, be_end = INT32_MAX, le_ok = 1, be_ok = 1;
     for (int i = 0; i < 4 && i < want_lanes; i++) {
-        if (lanes[i].base != base) return -1;
+        if (!pack_same_base(f, bb, def_idx, lanes[i].base, base)) return -1;
         int lo_i = lanes[i].offset - lanes[i].shift / 8;
         int hi_i = lanes[i].offset + lanes[i].shift / 8;
         if (le_off == INT32_MAX) le_off = lo_i; else if (lo_i != le_off) le_ok = 0;
@@ -1754,6 +1844,14 @@ static int pack_analyze(Func *f, BB *bb, const int *def_idx,
         seen |= bit;
     }
     if (seen != (1 << want_lanes) - 1) return -1;
+    /* Equal bases may be distinct vregs; take the earliest-defined so it is
+       live at every lane's load and passes the redefinition check below. */
+    for (int i = 0; i < want_lanes; i++) {
+        int bi = lanes[i].base;
+        if (bi >= 0 && bi < f->n_vregs && base >= 0 && base < f->n_vregs
+            && def_idx[bi] < def_idx[base])
+            base = bi;
+    }
     int is_be, base_off;
     if (le_ok)      { is_be = 0; base_off = le_off; }
     else if (be_ok) { is_be = 1; base_off = be_end - (want_lanes - 1); }
