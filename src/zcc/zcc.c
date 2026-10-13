@@ -3716,6 +3716,11 @@ static void configure_compiler(void)
             snprintf(buf, sizeof(buf), "--target=z80-unknown-none-z88dk -S -std=gnu23 -o - -O%d", lvl);
         }
         add_option_to_compiler(buf);
+        /* The classic library's vfprintf/vsnprintf objects (_vfprintf.asm,
+         * _vsnprintf.asm) use sdcccall(0) ABI.  Those functions are clang
+         * builtins, so clang ignores explicit __attribute__((sdcccall(0)))
+         * unless builtin knowledge is suppressed for them. */
+        add_option_to_compiler("-fno-builtin-vfprintf -fno-builtin-vsnprintf");
         if (c_generate_debug_info)
             add_option_to_compiler("-g");
         if (clangarg)

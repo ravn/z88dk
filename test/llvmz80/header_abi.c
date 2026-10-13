@@ -1,6 +1,13 @@
 /* Tests classic z88dk library ABI conventions (__z88dk_fastcall, __z88dk_callee,
  * smallc), memory allocation (malloc/calloc/realloc/free), stdlib utilities,
- * and setjmp/longjmp across multiple iterations to ensure stack balance. */
+ * and setjmp/longjmp across multiple iterations to ensure stack balance.
+ *
+ * NOTE: The z88dk classic library's qsort/bsearch comparator thunk (_qsort.asm)
+ * calls the user comparator via sdcccall(0) convention (the SDCC variant of
+ * the library is what gets linked under the underscore-prefixed _qsort symbol).
+ * Comparator callbacks must therefore use sdcccall(0) explicitly.  This is a
+ * known library-ABI fact; a future z88dk change could provide a sccz80/__smallc
+ * variant under _qsort as well. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,7 +16,7 @@
 extern int abs_fastcall(int value) __z88dk_fastcall;
 extern int memcmp_callee(const void *, const void *, size_t) __smallc __z88dk_callee;
 
-static int compare(const void *left, const void *right)
+static int __attribute__((sdcccall(0))) compare(const void *left, const void *right)
 {
     int a = *(const int *)left;
     int b = *(const int *)right;

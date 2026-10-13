@@ -304,8 +304,8 @@ extern int __LIB__ printf(const char *fmt,...) __vasmallc;
 extern int __LIB__ fprintf(FILE *f,const char *fmt,...) __vasmallc;
 extern int __LIB__ sprintf(char *s,const char *fmt,...) __vasmallc;
 extern int __LIB__ snprintf(char *s,size_t n,const char *fmt,...) __vasmallc;
-extern int __LIB__ vfprintf(FILE *f,const char *fmt,void *ap);
-extern int __LIB__ vsnprintf(char *str, size_t n,const char *fmt,void *ap);
+extern int __LIB__ __z88dk_sdcc0 vfprintf(FILE *f,const char *fmt,void *ap);
+extern int __LIB__ __z88dk_sdcc0 vsnprintf(char *str, size_t n,const char *fmt,void *ap);
 
 #define vprintf(ctl,arg) vfprintf(stdout,ctl,arg)
 #define vsprintf(buf,ctl,arg) vsnprintf(buf,65535,ctl,arg)

@@ -55,10 +55,15 @@
 #define __smallc __attribute__((smallc))
 #define __z88dk_callee __attribute__((z88dk_callee))
 #define __z88dk_fastcall __attribute__((z88dk_fastcall))
+// The classic library's vsnprintf/vfprintf are the SDCC-ABI variants (_vsnprintf.asm
+// etc.) that use sdcccall(0).  In the z88dk environment the default for plain C is
+// __smallc, so functions that link against those objects need an explicit annotation.
+#define __z88dk_sdcc0 __attribute__((sdcccall(0)))
 #else
 #define __smallc
 #define __z88dk_callee
 #define __z88dk_fastcall
+#define __z88dk_sdcc0
 #endif
 #endif
 

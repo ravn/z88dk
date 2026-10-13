@@ -1,32 +1,46 @@
 # LLVM-Z80 integration
 
-The `llvmz80` compiler selects `z80-unknown-none-z88dk` and sdcccall(0).
+The `llvmz80` compiler selects `z80-unknown-none-z88dk` and uses `__smallc` as
+the default calling convention for plain C.  Variadic functions and main use
+`sdcccall(0)` at code-generation time; that is handled by the backend without
+any IR annotation.
+
 Set `LLVMZ80EXE` to the clang executable.
-Clang's z88dk target now defaults to sdcccall(0) even without this flag.
-The driver relies on that target ABI and does not inject a convention flag.
+
+## Calling conventions
+
+In the z88dk environment, plain C is `__smallc` (arguments pushed left-to-right,
+first argument furthest from SP).  Explicit `__sdcccall(0)` and `__sdcccall(1)`
+attributes still annotate as usual.
+
+The driver relies on the target ABI and does not inject a convention flag.
 User `-Cg` options follow the default options.
 The driver preprocesses in gnu23 mode.
-Changing only `-Cg-std` can make header selection differ from compilation.
 
-Only the classic C library in z88dk is currently supported. Newlib and other C libraries are not supported.
+## Library ABI note
 
-The upstream `__ZPROTO*` definitions remain unchanged.
-The clang branch reverses arguments for existing classic library aliases.
-LLVM-Z80 attributes describe explicit smallc, fastcall and callee entries.
-Clang builtins implement varargs.
+The z88dk classic library (`cpm_clib`) is built with both sccz80 and SDCC
+object files.  Because clang generates underscore-prefixed symbols (`_qsort`,
+`_vsnprintf`, …), the SDCC variants of those functions are linked.  These
+variants use `sdcccall(0)` for certain arguments:
 
-Compile all program translation units with the same calling convention.
-An sdcccall(1) override requires compatible declarations and library callbacks.
-The override does not change the library ABI.
+- `vsnprintf` / `vfprintf`: called via `-fno-builtin-vsnprintf/vfprintf` so the
+  `__attribute__((sdcccall(0)))` annotation in `stdio.h` is respected.
+- `qsort` / `bsearch` comparator callbacks: `_qsort.asm`'s thunk calls the
+  user comparator with `sdcccall(0)`.  Declare comparators with
+  `__attribute__((sdcccall(0)))` to match.
 
-Run the tests with an isolated library build:
+Only the classic C library in z88dk is currently supported.  Newlib and other
+C libraries are not supported.
+
+## Running the tests
 
 ```sh
 export PATH="$PWD/bin:$PATH"
 export ZCC="$PWD/bin/zcc"
 export ZCCCFG="$PWD/lib/config"
 export LLVMZ80EXE=/path/to/clang
-export NTVCM=/path/to/ntvcm
+export NTVCM=/path/to/ntvcm  # or use z88dk-ticks
 export TMPDIR=/path/to/workspace/scratch/tmp
 make -C test llvmz80
 ```
@@ -35,18 +49,14 @@ The runtime tests check C23 at O0, O2 and Os.
 They use independent expected values and repeat calls to check stack cleanup.
 The tests require classic CP/M and an initialised heap.
 They do not use `-fno-builtin`.
-The runtime tests currently use `ntvcm` for CP/M execution. While `z88dk-ticks` can execute CP/M `.COM` binaries, it emits extra cycle-count information on stdout at exit and therefore does not currently replace `ntvcm`.
 
-Use a compiler that applies default0 to implicit library declarations.
-Otherwise unannotated `puts` and `vsnprintf` can retain the register ABI.
-The compiler regression is `clang/test/CodeGen/z80-default-calling-conv-builtins.c`.
+## Varargs / va_list
 
-The TMPDIR change is separate from the compiler integration.
-Run its test with `make -C test/llvmz80 tmpdir`.
-This change set does not include the math32 archive-dependency fix.
+`va_list` uses LLVM's `__builtin_va_list`.  For `vsnprintf`, the `stdio.h`
+header annotates it with `__attribute__((sdcccall(0)))` and the driver passes
+`-fno-builtin-vsnprintf` to prevent clang's built-in knowledge from overriding
+that annotation.
 
-Fresh upstream math32 at `e67ef86a93` returns negative zero for `4.0f - 4.0f`.
-The existing arithmetic fixture expects positive zero and fails that check.
-A direct `cm32_sdcc_fssub` call returns the same `0x80000000` result.
-The reference integration headers also produce that failure with the fresh archive.
-This change set does not modify math32.
+## C23 variadics
+
+`va_start` without a parameter name is available in gnu23 mode.
