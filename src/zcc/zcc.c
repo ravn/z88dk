@@ -1610,7 +1610,10 @@ int main(int argc, char **argv)
             /* Instead the plan is to copy the asm file to the temp directory and add the original   */
             /* source directory to the include search path                                           */
 
-            BuildAsmLine(asmarg, sizeof(asmarg), " -s ");
+            if (compiler_type == CC_LLVMZ80)
+                asmarg[0] = '\0';  /* sdasz80 needs no z80asm-specific flags */
+            else
+                BuildAsmLine(asmarg, sizeof(asmarg), " -s ");
 
             /* Check if source .asm file is in the temp directory already (indicates this is an intermediate file) */
             ptr = changesuffix(temporary_filenames[i], ".asm");
@@ -1679,10 +1682,15 @@ int main(int argc, char **argv)
                 else
                     q = original_filenames[i];
 
-                snprintf(tmp, sizeof(tmp) - 3, 
-						 "MODULE %s%s\n"
-                         "LINE 0, \"%s\"\n\n", 
-						isdigit(*q) ? "_" : "", q, original_filenames[i]);
+                if (compiler_type == CC_LLVMZ80) {
+                    /* sdasz80 doesn't use MODULE/LINE directives */
+                    tmp[0] = '\0';
+                } else {
+                    snprintf(tmp, sizeof(tmp) - 3,
+                             "MODULE %s%s\n"
+                             "LINE 0, \"%s\"\n\n",
+                             isdigit(*q) ? "_" : "", q, original_filenames[i]);
+                }
 
                 /* change non-alnum chars in module name to underscore */
 
@@ -3702,18 +3710,18 @@ static void configure_compiler(void)
         if (env_llvmz80 && *env_llvmz80)
             c_llvmz80_exe = env_llvmz80;
 
-        preprocarg = " -E -D__CLANG -D__LLVMZ80 --target=z80-unknown-none-z88dk -std=gnu23";
+        preprocarg = " -E -D__CLANG -D__LLVMZ80 --target=z80-unknown-none-sdcc -std=gnu23";
         BuildOptions(&cpparg, preprocarg);
         BuildOptions(&asmargs, "-D__LLVMZ80");
         BuildOptions(&linkargs, "-D__LLVMZ80");
 
         if (opt_code_size) {
-            snprintf(buf, sizeof(buf), "--target=z80-unknown-none-z88dk -S -std=gnu23 -o - -Oz");
+            snprintf(buf, sizeof(buf), "--target=z80-unknown-none-sdcc -S -std=gnu23 -o - -Oz");
         } else {
             int lvl = peepholeopt;
             if (lvl < 0) lvl = 0;
             if (lvl > 3) lvl = 3;
-            snprintf(buf, sizeof(buf), "--target=z80-unknown-none-z88dk -S -std=gnu23 -o - -O%d", lvl);
+            snprintf(buf, sizeof(buf), "--target=z80-unknown-none-sdcc -S -std=gnu23 -o - -O%d", lvl);
         }
         add_option_to_compiler(buf);
         /* The classic library's vfprintf/vsnprintf objects (_vfprintf.asm,
@@ -3731,6 +3739,9 @@ static void configure_compiler(void)
         c_cpp_exe = c_llvmz80_exe;
         compiler_style = filter_out;
         c_stylecpp = filter_out;
+        /* SDCC-format assembly output: use sdasz80/sdldz80 instead of z88dk-z80asm */
+        c_assembler = "sdasz80";
+        c_linker = "sdldz80";
     } else {
         printf("Unknown compiler type: %s\n",c_compiler_type);
         exit(1);
