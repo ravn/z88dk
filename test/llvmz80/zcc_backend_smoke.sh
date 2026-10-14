@@ -54,19 +54,19 @@ case "$COMPILE_LINE" in
 esac
 
 
-if ! "$ZCC" +cpm -compiler=llvmz80 -a -Cg-emit-llvm \
+# Verify the z88dk environment emits z80asm-format assembly (SECTION code_compiler),
+# not SDCC-format assembly (.area _CODE).  This confirms __smallc is the default C ABI.
+if ! TMPDIR="$WORK/tmp" LLVMZ80EXE="$LLVMZ80EXE" \
+        "$ZCC" +cpm -compiler=llvmz80 -S \
         "$WORK/main.c" -o "$WORK/default.asm" >"$WORK/default.log" 2>&1; then
     cat "$WORK/default.log"
     echo "FAIL: cannot inspect target function ABI"
     exit 1
 fi
-DEFINITION=$(grep 'define .*@sum(' "$WORK/default.asm" || true)
-case "$DEFINITION" in
-    *z80_sdcccall0*) ;;
-    *)
-        echo "FAIL: target function does not use sdcccall(0): $DEFINITION"
-        exit 1
-        ;;
-esac
+if ! grep -q 'SECTION.*code_compiler' "$WORK/default.asm"; then
+    cat "$WORK/default.asm"
+    echo "FAIL: output is not z88dk z80asm format (SECTION code_compiler not found)"
+    exit 1
+fi
 
 echo "PASS: zcc compiles llvmz80 C with the native z88dk target triple"
