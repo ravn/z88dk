@@ -196,8 +196,18 @@ extern   int optreset;
 // One shared search/sort core.  sccz80 links the bare names (__LIB__), sdcc the
 // _-prefixed ones; each entry embeds its own comparator thunk, so a single
 // classic library serves both compilers (see classic/stdlib/{qsort,bsearch}.asm).
+//
+// llvmz80 uses the sccz80 (left-to-right / __smallc) comparator thunk, so it
+// must call the bare-name entries (qsort / bsearch) rather than the
+// sdcc-underscore entries (_qsort / _bsearch).  The __asm__ attribute bypasses
+// LLVM's automatic underscore prefix so the linker resolves to the correct entry.
+#if defined(__LLVMZ80)
+extern void   qsort(void *base, unsigned int nmemb, unsigned int size, int (*compar)(const void *, const void *)) __attribute__((smallc)) __asm__("qsort");
+extern void  *bsearch(void *key, void *base, unsigned int nmemb, unsigned int size, int (*compar)(const void *, const void *)) __attribute__((smallc)) __asm__("bsearch");
+#else
 extern void __LIB__   qsort(void *base, unsigned int nmemb, unsigned int size, int (*compar)(const void *, const void *)) __smallc;
 extern void __LIB__  *bsearch(void *key, void *base, unsigned int nmemb, unsigned int size, int (*compar)(const void *, const void *)) __smallc;
+#endif
 
 // l_qsort()/l_bsearch() operate on arrays of 2-byte items (pointers/ints),
 // sharing the one core rather than a separate little implementation.

@@ -1114,6 +1114,11 @@ int main(int argc, char **argv)
     }
 
 
+    /* llvmz80 reserves IY: default to ixiy clib (cpmixiy_clib + z80iy_crt0)
+     * which provides __z80_memset_builtin and other IY-build builtins. */
+    if (c_compiler_type && strcmp(c_compiler_type, "llvmz80") == 0)
+        c_clib = muststrdup("ixiy");
+
     if (add_variant_args(c_subtype, c_subtype_array_num, c_subtype_array) == -1) {
         fprintf(stderr, "Cannot find definition for target -subtype=%s\n", c_subtype);
         exit(1);
@@ -3716,6 +3721,19 @@ static void configure_compiler(void)
             snprintf(buf, sizeof(buf), "--target=z80-unknown-none-z88dk -S -std=gnu23 -o - -O%d", lvl);
         }
         add_option_to_compiler(buf);
+        /* Prevent clang from folding stdlib calls to builtins that bypass
+         * the ZPROTO bridges in the z88dk classic headers. */
+        add_option_to_compiler(
+            "-fno-builtin-strcpy -fno-builtin-strncpy -fno-builtin-stpcpy"
+            " -fno-builtin-strcat -fno-builtin-strncat"
+            " -fno-builtin-strcmp -fno-builtin-strncmp"
+            " -fno-builtin-strcasecmp -fno-builtin-strncasecmp"
+            " -fno-builtin-strchr -fno-builtin-strrchr -fno-builtin-strpbrk"
+            " -fno-builtin-strspn -fno-builtin-strcspn -fno-builtin-strstr"
+            " -fno-builtin-strlen -fno-builtin-strnlen -fno-builtin-strdup"
+            " -fno-builtin-memcpy -fno-builtin-memmove -fno-builtin-memset"
+            " -fno-builtin-memcmp -fno-builtin-memchr"
+            " -fno-builtin-index -fno-builtin-rindex");
         if (c_generate_debug_info)
             add_option_to_compiler("-g");
         if (clangarg)
