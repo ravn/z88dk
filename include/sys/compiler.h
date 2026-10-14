@@ -48,14 +48,17 @@
 #define __smallconly
 #endif
 
-// Make intellisense run easier..
+// llvmz80 implements the Z80 calling-convention attributes natively;
+// enable the ZPROTO bridges so classic sccz80 libraries link correctly.
+// Other clang-shaped frontends (IDE indexers, ez80-clang) keep
+// __STDC_ABI_ONLY so the headers parse without the bridge machinery.
 #if __clang__ | __CLANG | __XCC
-#define __STDC_ABI_ONLY
 #if defined(__LLVMZ80)
-#define __smallc __attribute__((smallc))
-#define __z88dk_callee __attribute__((z88dk_callee))
+#define __smallc         __attribute__((smallc))
+#define __z88dk_callee   __attribute__((z88dk_callee))
 #define __z88dk_fastcall __attribute__((z88dk_fastcall))
 #else
+#define __STDC_ABI_ONLY
 #define __smallc
 #define __z88dk_callee
 #define __z88dk_fastcall
