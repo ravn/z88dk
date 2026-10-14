@@ -1114,6 +1114,58 @@ int main(int argc, char **argv)
     }
 
 
+    /* llvmz80 reserves IY and emits __z80_mem{set,cpy,move}_builtin for
+     * backend-synthesized memops.  These symbols live in z80_z88dk_rt.lib,
+     * built from compiler-rt sources by LLVM (see llvm-z80 PR #112,
+     * users/zlfn/runtime-4-z88dk).  Probe for the lib via (in order):
+     *   1. $LLVMZ80_RTLIB_DIR/z80_z88dk_rt.lib  (explicit override)
+     *   2. $(dirname $(dirname $LLVMZ80EXE))/lib/z80/z80_z88dk_rt.lib
+     * Auto-inject -L<dir> -lz80_z88dk_rt into the linker command.  Hard
+     * fail if not found. */
+    if (c_compiler_type && strcmp(c_compiler_type, "llvmz80") == 0) {
+        char rtlib_path[FILENAME_MAX+1];
+        char rtlib_dir[FILENAME_MAX+1];
+        const char *env_rtlib_dir = getenv("LLVMZ80_RTLIB_DIR");
+        const char *env_llvmz80 = getenv("LLVMZ80EXE");
+        int found = 0;
+
+        if (env_rtlib_dir && *env_rtlib_dir) {
+            snprintf(rtlib_path, sizeof(rtlib_path),
+                     "%s/z80_z88dk_rt.lib", env_rtlib_dir);
+            if (access(rtlib_path, R_OK) == 0) {
+                strncpy(rtlib_dir, env_rtlib_dir, sizeof(rtlib_dir)-1);
+                rtlib_dir[sizeof(rtlib_dir)-1] = '\0';
+                found = 1;
+            }
+        }
+        if (!found && env_llvmz80 && *env_llvmz80) {
+            char tmp[FILENAME_MAX+1];
+            char *p;
+            strncpy(tmp, env_llvmz80, sizeof(tmp)-1);
+            tmp[sizeof(tmp)-1] = '\0';
+            p = strrchr(tmp, '/');
+            if (p) { *p = '\0'; p = strrchr(tmp, '/'); if (p) *p = '\0'; }
+            snprintf(rtlib_dir, sizeof(rtlib_dir), "%s/lib/z80", tmp);
+            snprintf(rtlib_path, sizeof(rtlib_path),
+                     "%s/z80_z88dk_rt.lib", rtlib_dir);
+            if (access(rtlib_path, R_OK) == 0) found = 1;
+        }
+        if (!found) {
+            fprintf(stderr,
+                "zcc: -compiler=llvmz80 requires z80_z88dk_rt.lib.\n"
+                "     Set LLVMZ80_RTLIB_DIR to its directory, or install\n"
+                "     llvm-z80 so that LLVMZ80EXE's grandparent contains\n"
+                "     lib/z80/z80_z88dk_rt.lib.\n");
+            exit(1);
+        }
+        {
+            char lpath[FILENAME_MAX+8];
+            snprintf(lpath, sizeof(lpath), "-L\"%s\" ", rtlib_dir);
+            BuildOptions(&linker_libpath_first, lpath);
+            BuildOptions(&linker_linklib_first, "-lz80_z88dk_rt ");
+        }
+    }
+
     if (add_variant_args(c_subtype, c_subtype_array_num, c_subtype_array) == -1) {
         fprintf(stderr, "Cannot find definition for target -subtype=%s\n", c_subtype);
         exit(1);
@@ -3719,6 +3771,19 @@ static void configure_compiler(void)
             snprintf(buf, sizeof(buf), "--target=z80-unknown-none-z88dk -S -std=gnu23 -o - -O%d", lvl);
         }
         add_option_to_compiler(buf);
+        /* Prevent clang from folding stdlib calls to builtins that bypass
+         * the ZPROTO bridges in the z88dk classic headers. */
+        add_option_to_compiler(
+            "-fno-builtin-strcpy -fno-builtin-strncpy -fno-builtin-stpcpy"
+            " -fno-builtin-strcat -fno-builtin-strncat"
+            " -fno-builtin-strcmp -fno-builtin-strncmp"
+            " -fno-builtin-strcasecmp -fno-builtin-strncasecmp"
+            " -fno-builtin-strchr -fno-builtin-strrchr -fno-builtin-strpbrk"
+            " -fno-builtin-strspn -fno-builtin-strcspn -fno-builtin-strstr"
+            " -fno-builtin-strlen -fno-builtin-strnlen -fno-builtin-strdup"
+            " -fno-builtin-memcpy -fno-builtin-memmove -fno-builtin-memset"
+            " -fno-builtin-memcmp -fno-builtin-memchr"
+            " -fno-builtin-index -fno-builtin-rindex");
         if (c_generate_debug_info)
             add_option_to_compiler("-g");
         if (clangarg)
