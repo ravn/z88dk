@@ -197,14 +197,13 @@ extern   int optreset;
 //
 // void *cmp == char (*cmp)(void *key, void *datum);
 
-// One shared search/sort core.  sccz80 links the bare names (__LIB__), sdcc the
-// _-prefixed ones; each entry embeds its own comparator thunk, so a single
-// classic library serves both compilers (see classic/stdlib/{qsort,bsearch}.asm).
-//
-// llvmz80 uses the sccz80 (left-to-right / __smallc) comparator thunk, so it
-// must call the bare-name entries (qsort / bsearch) rather than the
-// sdcc-underscore entries (_qsort / _bsearch).  The __asm__ attribute bypasses
-// LLVM's automatic underscore prefix so the linker resolves to the correct entry.
+// One shared search/sort core. The classic library provides two entry points:
+// 'qsort' (bare) uses l_cmp_sccz80 (L-to-R comparator thunk), while '_qsort'
+// uses l_cmp_sdcc (R-to-L thunk). Declarations cannot be unified:
+// - sccz80: keyword __LIB__ strips leading '_'; rejects __asm__("...") syntax.
+// - sdcc:   __LIB__ is empty -> links to _qsort (matching sdcc comparator ABI).
+// - llvmz80: __LIB__ is empty, but needs the bare entry (L-to-R comparator);
+//            __asm__("qsort") bypasses Clang's automatic leading underscore.
 #if defined(__LLVMZ80)
 extern void   qsort(void *base, unsigned int nmemb, unsigned int size, int (*compar)(const void *, const void *)) __attribute__((smallc)) __asm__("qsort");
 extern void  *bsearch(void *key, void *base, unsigned int nmemb, unsigned int size, int (*compar)(const void *, const void *)) __attribute__((smallc)) __asm__("bsearch");
