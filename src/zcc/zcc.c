@@ -1115,10 +1115,22 @@ int main(int argc, char **argv)
     }
 
 
-    /* llvmz80 reserves IY: default to ixiy clib (cpmixiy_clib + z80iy_crt0)
-     * which provides __z80_memset_builtin and other IY-build builtins. */
-    if (c_compiler_type && strcmp(c_compiler_type, "llvmz80") == 0)
-        c_clib = muststrdup("ixiy");
+    /* llvmz80 reserves IY: default to the ixiy clib variant on targets that
+     * actually ship one (cpmixiy_clib + z80iy_crt0), which provides
+     * __z80_memset_builtin and other IY-build builtins.  Targets without an
+     * ixiy variant (e.g. +test) must not be forced to it -- doing so trips
+     * add_variant_args() below with "Cannot find definition for -clib=ixiy".
+     * An explicit user -clib=... always wins. */
+    if (c_compiler_type && strcmp(c_compiler_type, "llvmz80") == 0 &&
+        (c_clib == NULL || strcmp(c_clib, "default") == 0)) {
+        int i;
+        for (i = 0; i < c_clib_array_num; i++) {
+            if (strncmp("ixiy", c_clib_array[i], 4) == 0 && isspace(c_clib_array[i][4])) {
+                c_clib = muststrdup("ixiy");
+                break;
+            }
+        }
+    }
 
     if (add_variant_args(c_subtype, c_subtype_array_num, c_subtype_array) == -1) {
         fprintf(stderr, "Cannot find definition for target -subtype=%s\n", c_subtype);
