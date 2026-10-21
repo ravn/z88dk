@@ -12,7 +12,7 @@ trap 'rm -rf "$WORK"' EXIT HUP INT TERM
 cd "$WORK"
 
 for optimisation in O0 O2 Os; do
-for test in varargs header_abi math32 runtime_memory; do
+for test in varargs header_abi math32 runtime_memory runtime_arith32; do
     mathlib=
     if [ "$test" = math32 ]; then
         mathlib=-lm
