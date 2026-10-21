@@ -10,7 +10,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#pragma printf = "%d"
 
 extern int abs_fastcall(int value) __z88dk_fastcall;
 
