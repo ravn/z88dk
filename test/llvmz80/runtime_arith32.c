@@ -15,6 +15,18 @@
  * The 32-bit library helpers live in z80iy_crt0.lib (not cpm_clib.lib),
  * so a non-ixiy link chain fails here on the first `long` divide.
  *
+ * FUTURE WORK: 64-bit (long long) arithmetic is NOT tested here because
+ * no z88dk library ships the required helpers.  llvmz80's backend emits
+ * calls to ___divdi3 / ___muldi3 / ___moddi3 / ___udivdi3 / ___umoddi3
+ * for `long long` ops, but every target's clib fails at link with
+ * "undefined symbol: ___divdi3" etc.  A `runtime_arith64.c` cannot be
+ * added until either (a) the helpers are built into some crt0 lib,
+ * or (b) the backend lowers 64-bit arithmetic without external calls.
+ * This is a separate gap from the ixiy packaging issue tracked in
+ * ravn/z88dk#91 -- #91's ___z80_memset_builtin exists in z80iy_crt0.lib,
+ * while ___divdi3 doesn't exist anywhere.  `long long` currently works
+ * only for storage / variadic pass-through, not arithmetic.
+ *
  * Hardening against ABI parameter-order bugs:
  *   - Operands differ by magnitude so a swap of a/b changes the result
  *     (e.g. 100/7 = 14 but 7/100 = 0 -- distinct).
