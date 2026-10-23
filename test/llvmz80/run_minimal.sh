@@ -13,6 +13,8 @@ cd "$WORK"
 
 for optimisation in O0 O2 Os; do
 for test in varargs header_abi math32 runtime_memory runtime_arith32 runtime_arith16 runtime_string memops_backend_paths; do
+    # NOTE: memops_emission.c is NOT in this loop -- it is an emission-level
+    # (compile-only) test run as a separate step at the end of this script.
     mathlib=
     if [ "$test" = math32 ]; then
         mathlib=-lm
@@ -37,3 +39,9 @@ for test in varargs header_abi math32 runtime_memory runtime_arith32 runtime_ari
     printf 'PASS: %s gnu23 %s\n' "$test" "$optimisation"
 done
 done
+
+# Emission-level step: assert backend emits inline LDIR/LDDR when direction
+# is statically known, and runtime calls (asm_memmove / asm_memset / their
+# predecessors) when it isn't.  Compile-only, no ntvcm run.
+printf '\n--- memops_emission ---\n'
+"$DIR/check_memops_emission.sh"
