@@ -1,11 +1,17 @@
 #!/bin/sh
-# Compiles header_abi.c and varargs.c for CP/M with llvmz80 across -O0, -O2, -Os,
-# runs the binaries under an emulator, and validates exact output matching.
+# Compiles the C tests for CP/M with llvmz80 across -O0, -O2, -Os, runs each
+# binary under z88dk-ticks (CP/M emulator shipped with z88dk, invoked with
+# -no-cycles so only the program's stdout appears), and validates exact
+# output matching.
 set -eu
 
 DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 . "$DIR/test_env.sh"
-: "${NTVCM:?Set NTVCM to the emulator}"
+
+if [ ! -x "$TICKS" ]; then
+    echo "ERROR: z88dk-ticks not found at $TICKS -- run 'make -C src/ticks' first" >&2
+    exit 1
+fi
 
 WORK=$(mktemp -d "$TMPDIR/minimal-abi.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT HUP INT TERM
@@ -26,7 +32,7 @@ for test in varargs header_abi math32 runtime_memory runtime_arith32 runtime_ari
         exit 1
     }
     program=$(printf '%s.COM' "$test" | tr '[:lower:]' '[:upper:]')
-    perl -e 'alarm shift; exec @ARGV' 15 "$NTVCM" "$program" > "$test-output.log" 2>&1 || {
+    perl -e 'alarm shift; exec @ARGV' 15 "$TICKS" -mz80 -no-cycles "$program" > "$test-output.log" 2>&1 || {
         cat "$test-output.log"
         exit 1
     }
