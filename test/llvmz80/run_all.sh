@@ -40,24 +40,20 @@ export ZCC ZCCCFG
 PATH="$ROOT/bin:$PATH"
 export PATH
 
-# Locate NTVCM
-if [ -z "${NTVCM:-}" ]; then
-    for candidate in \
-        "$WORKSPACE/ntvcm/ntvcm" \
-        "$(command -v ntvcm 2>/dev/null)"; do
-        if [ -x "$candidate" ]; then
-            NTVCM="$candidate"
-            break
-        fi
-    done
+# CP/M emulator: z88dk-ticks, shipped with z88dk (self-contained).
+# Set TICKS explicitly to override.
+TICKS=${TICKS:-"$ROOT/bin/z88dk-ticks"}
+if [ ! -x "$TICKS" ]; then
+    echo "ERROR: z88dk-ticks not found at $TICKS -- run 'make -C src/ticks' first" >&2
+    exit 1
 fi
-export NTVCM
+export TICKS
 
 echo "=== z88dk llvmz80 integration tests ==="
 echo "  LLVMZ80EXE : $LLVMZ80EXE"
 echo "  ZCC        : $ZCC"
 echo "  ZCCCFG     : $ZCCCFG"
-echo "  NTVCM      : ${NTVCM:-not found}"
+echo "  TICKS      : $TICKS"
 echo "  TMPDIR     : $TMPDIR"
 echo ""
 
