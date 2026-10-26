@@ -1115,20 +1115,57 @@ int main(int argc, char **argv)
     }
 
 
-    /* llvmz80 reserves IY: default to the ixiy clib variant on targets that
-     * actually ship one (cpmixiy_clib + z80iy_crt0), which provides
-     * __z80_memset_builtin and other IY-build builtins.  Targets without an
-     * ixiy variant (e.g. +test) must not be forced to it -- doing so trips
-     * add_variant_args() below with "Cannot find definition for -clib=ixiy".
-     * An explicit user -clib=... always wins. */
-    if (c_compiler_type && strcmp(c_compiler_type, "llvmz80") == 0 &&
-        (c_clib == NULL || strcmp(c_clib, "default") == 0)) {
-        int i;
-        for (i = 0; i < c_clib_array_num; i++) {
-            if (strncmp("ixiy", c_clib_array[i], 4) == 0 && isspace(c_clib_array[i][4])) {
-                c_clib = muststrdup("ixiy");
-                break;
+    /* llvmz80 reserves IY and emits __z80_mem{set,cpy,move}_builtin for
+     * backend-synthesized memops.  These symbols live in z80_z88dk_rt.lib,
+     * built from compiler-rt sources by LLVM (see llvm-z80 PR #112,
+     * users/zlfn/runtime-4-z88dk).  Probe for the lib via (in order):
+     *   1. $LLVMZ80_RTLIB_DIR/z80_z88dk_rt.lib  (explicit override)
+     *   2. $(dirname $(dirname $LLVMZ80EXE))/lib/z80/z80_z88dk_rt.lib
+     * Auto-inject -L<dir> -lz80_z88dk_rt into the linker command.  Hard
+     * fail if not found -- the previous -clib=ixiy workaround is removed. */
+    if (c_compiler_type && strcmp(c_compiler_type, "llvmz80") == 0) {
+        char rtlib_path[FILENAME_MAX+1];
+        char rtlib_dir[FILENAME_MAX+1];
+        const char *env_rtlib_dir = getenv("LLVMZ80_RTLIB_DIR");
+        const char *env_llvmz80 = getenv("LLVMZ80EXE");
+        int found = 0;
+
+        if (env_rtlib_dir && *env_rtlib_dir) {
+            snprintf(rtlib_path, sizeof(rtlib_path),
+                     "%s/z80_z88dk_rt.lib", env_rtlib_dir);
+            if (access(rtlib_path, R_OK) == 0) {
+                strncpy(rtlib_dir, env_rtlib_dir, sizeof(rtlib_dir)-1);
+                rtlib_dir[sizeof(rtlib_dir)-1] = '\0';
+                found = 1;
             }
+        }
+        if (!found && env_llvmz80 && *env_llvmz80) {
+            /* $LLVMZ80EXE is .../bin/clang -> grandparent is install prefix */
+            char tmp[FILENAME_MAX+1];
+            char *p;
+            strncpy(tmp, env_llvmz80, sizeof(tmp)-1);
+            tmp[sizeof(tmp)-1] = '\0';
+            p = strrchr(tmp, '/');
+            if (p) { *p = '\0'; p = strrchr(tmp, '/'); if (p) *p = '\0'; }
+            snprintf(rtlib_dir, sizeof(rtlib_dir), "%s/lib/z80", tmp);
+            snprintf(rtlib_path, sizeof(rtlib_path),
+                     "%s/z80_z88dk_rt.lib", rtlib_dir);
+            if (access(rtlib_path, R_OK) == 0) found = 1;
+        }
+        if (!found) {
+            fprintf(stderr,
+                "zcc: -compiler=llvmz80 requires z80_z88dk_rt.lib.\n"
+                "     Set LLVMZ80_RTLIB_DIR to its directory, or install\n"
+                "     llvm-z80 so that LLVMZ80EXE's grandparent contains\n"
+                "     lib/z80/z80_z88dk_rt.lib.\n");
+            exit(1);
+        }
+        /* Inject -L<dir> into libpath args, -lz80_z88dk_rt into linklib args. */
+        {
+            char lpath[FILENAME_MAX+8];
+            snprintf(lpath, sizeof(lpath), "-L\"%s\" ", rtlib_dir);
+            BuildOptions(&linker_libpath_first, lpath);
+            BuildOptions(&linker_linklib_first, "-lz80_z88dk_rt ");
         }
     }
 
