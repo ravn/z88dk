@@ -18,7 +18,7 @@ trap 'rm -rf "$WORK"' EXIT HUP INT TERM
 cd "$WORK"
 
 for optimisation in O0 O2 Os; do
-for test in varargs header_abi math32 runtime_memory runtime_arith32 runtime_arith16 runtime_string memops_backend_paths; do
+for test in varargs header_abi math32 runtime_memory runtime_arith32 runtime_arith16 runtime_string runtime_qsort memops_backend_paths; do
     # NOTE: memops_emission.c is NOT in this loop -- it is an emission-level
     # (compile-only) test run as a separate step at the end of this script.
     mathlib=
